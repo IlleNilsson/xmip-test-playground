@@ -19,6 +19,7 @@ use xmip_observe::{Health, HealthRecord, Snapshot};
 use crate::pingpong::ping_pong;
 use crate::roundtrip::{
     FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
+    WebSocketRoundTrip,
 };
 use crate::verdict::{Contract, Outcome, Verdict};
 
@@ -51,10 +52,10 @@ pub const CONTRACTS: [Contract; 2] = [Contract::Bytes, Contract::Text];
 /// adapter by every contract and publishes what it found.
 ///
 /// Every transport the estate implements is wired: file ping-pongs over one
-/// directory, tcp/http/smtp over a loopback connection, udp over a loopback
-/// datagram. A transport declared but not yet implemented (websocket and the
-/// rest) is simply absent from the tick rather than reported as failing, and
-/// joins by adding its adapter here.
+/// directory, tcp/http/smtp/websocket over a loopback connection, udp over a
+/// loopback datagram. A transport declared but not yet implemented is simply
+/// absent from the tick rather than reported as failing, and joins by adding its
+/// adapter here.
 pub struct Schedule {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
@@ -72,6 +73,7 @@ impl Schedule {
             Box::new(HttpRoundTrip::new()),
             Box::new(SmtpRoundTrip::new()),
             Box::new(UdpRoundTrip::new()),
+            Box::new(WebSocketRoundTrip::new()),
         ];
 
         Self {

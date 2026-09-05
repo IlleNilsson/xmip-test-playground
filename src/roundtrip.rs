@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use xmip_transport::{
     FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport, UdpTransport,
+    WebSocketTransport,
 };
 
 /// What one round returned.
@@ -216,6 +217,51 @@ impl RoundTrip for SmtpRoundTrip {
     }
 }
 
+/// WebSocket: the http upgrade shape. Bind, then from another thread connect,
+/// complete the opening handshake and send one frame; accept the connection,
+/// finish the handshake, read the frame.
+pub struct WebSocketRoundTrip;
+
+impl WebSocketRoundTrip {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for WebSocketRoundTrip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoundTrip for WebSocketRoundTrip {
+    fn transport(&self) -> &'static str {
+        "websocket"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = WebSocketTransport::new("127.0.0.1:0");
+
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+
+        let payload = payload.to_vec();
+        let sender = std::thread::spawn(move || {
+            WebSocketTransport::new("127.0.0.1:0")
+                .send(&format!("ws://{address}/pingpong"), &payload)
+        });
+
+        let caught = far_end.accept_one(&listener);
+
+        let sent = sender.join();
+
+        judge(caught, sent)
+    }
+}
+
 /// UDP: bind the receiving socket first (a datagram fired before the receiver
 /// is bound is dropped silently), learn its address, fire one datagram from
 /// another thread, receive it. A read timeout keeps a lost datagram from
@@ -344,6 +390,17 @@ mod tests {
     #[test]
     fn udp_round_trips_a_datagram() {
         let rt = UdpRoundTrip::new();
+        let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
+
+        match rt.exchange(&payload) {
+            Exchange::Returned(bytes) => assert_eq!(bytes, payload),
+            other => panic!("expected Returned, got {}", label(&other)),
+        }
+    }
+
+    #[test]
+    fn websocket_round_trips_a_frame() {
+        let rt = WebSocketRoundTrip::new();
         let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
 
         match rt.exchange(&payload) {

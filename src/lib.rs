@@ -16,10 +16,11 @@
 //!
 //! Xmip's own transports are the far end, so nothing external is stood up and
 //! the Playground runs on a laptop with no network. Every implemented transport
-//! ping-pongs today — file over a directory, tcp/http/smtp over a loopback
-//! connection, udp over a loopback datagram — each behind one [`RoundTrip`]
-//! adapter, so the scenario is one thing over all of them. A transport declared
-//! but not yet implemented is a new adapter away, not a new test.
+//! ping-pongs today — file over a directory, tcp/http/smtp/websocket over a
+//! loopback connection, udp over a loopback datagram — each behind one
+//! [`RoundTrip`] adapter, so the scenario is one thing over all of them. A
+//! transport declared but not yet implemented is a new adapter away, not a new
+//! test.
 //!
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
@@ -32,6 +33,7 @@ pub mod verdict;
 pub use pingpong::ping_pong;
 pub use roundtrip::{
     Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
+    WebSocketRoundTrip,
 };
 pub use schedule::{CONTRACTS, Schedule};
 pub use verdict::{Contract, Outcome, Verdict};
