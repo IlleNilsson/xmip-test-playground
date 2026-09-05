@@ -10,11 +10,11 @@
 [workspace]
 
 [package]
-name = "xmip-core-playground"
+name = "xmip-test-playground"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/IlleNilsson/xmip-core-playground"
+repository = "https://github.com/IlleNilsson/xmip-test-playground"
 description = "The Xmip Playground: spawns Development nodes as processes and exercises every transport and content contract through them, continuously."
 publish = false
 

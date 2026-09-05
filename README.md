@@ -1,4 +1,4 @@
-# xmip-core-playground
+# xmip-test-playground
 
 **The Xmip Playground.** The tool that exercises Xmip — every transport, every
 content contract, all the time.
