@@ -27,6 +27,7 @@
 //! 2026-09-05; named by the owner.
 
 pub mod contracts;
+pub mod fault;
 pub mod pingpong;
 pub mod report;
 pub mod roundtrip;
@@ -34,6 +35,7 @@ pub mod schedule;
 pub mod verdict;
 
 pub use contracts::{ContentContract, Shape};
+pub use fault::{Fault, FaultKind, FaultPlan};
 pub use pingpong::ping_pong;
 pub use report::{history_toml, to_toml, write_atomic};
 pub use roundtrip::{
@@ -41,4 +43,4 @@ pub use roundtrip::{
     WebSocketRoundTrip,
 };
 pub use schedule::{CONTRACTS, Schedule};
-pub use verdict::{Contract, Outcome, Verdict};
+pub use verdict::{Contract, Outcome, Stage, Verdict};

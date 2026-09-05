@@ -108,9 +108,37 @@ impl Contract {
     }
 }
 
-/// One round's outcome for one pair.
+/// A stage of the message path, the axis an operator drills first. A pingpong
+/// round drives all three: Receive takes the Stream in, Process holds the
+/// contract over it, Send delivers it back out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Receive,
+    Process,
+    Send,
+}
+
+impl Stage {
+    /// Every stage, in message-path order.
+    pub const ALL: [Stage; 3] = [Stage::Receive, Stage::Process, Stage::Send];
+
+    /// The token as it appears in a scope and on the landing page.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Stage::Receive => "receive",
+            Stage::Process => "process",
+            Stage::Send => "send",
+        }
+    }
+}
+
+/// One round's outcome for one (stage, transport, contract). ADR-0028: a verdict
+/// per pair, published on `xmip:///<node>/<stage>/<transport>/<contract>`, so
+/// the message-path stages an operator watches are the first axis of the tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
+    pub stage: Stage,
     pub transport: String,
     pub contract: Contract,
     pub outcome: Outcome,
@@ -133,11 +161,13 @@ pub enum Outcome {
 }
 
 impl Verdict {
-    /// The scope this verdict is published under.
+    /// The scope this verdict is published under:
+    /// `<node>/<stage>/<transport>/<contract>`.
     #[must_use]
     pub fn scope(&self, node: &str) -> String {
         format!(
-            "{node}/exercise/{}/{}",
+            "{node}/{}/{}/{}",
+            self.stage.name(),
             self.transport,
             self.contract.name()
         )
@@ -171,8 +201,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_delivered_verdict_is_green_and_says_how_much_moved() {
+    fn a_delivered_verdict_is_green_and_scopes_by_stage() {
         let verdict = Verdict {
+            stage: Stage::Receive,
             transport: "file".to_string(),
             contract: Contract::Text,
             outcome: Outcome::Delivered,
@@ -182,14 +213,33 @@ mod tests {
 
         let record = verdict.health("xmip:///playground");
 
-        assert_eq!(record.scope, "xmip:///playground/exercise/file/text");
+        assert_eq!(record.scope, "xmip:///playground/receive/file/text");
         assert_eq!(record.health, Health::Green);
         assert!(record.evidence.contains("14 bytes"));
     }
 
     #[test]
+    fn the_stage_is_the_first_segment_under_the_node() {
+        for stage in Stage::ALL {
+            let verdict = Verdict {
+                stage,
+                transport: "tcp".to_string(),
+                contract: Contract::Json,
+                outcome: Outcome::Delivered,
+                bytes: 1,
+                observed_unix_nanos: 1,
+            };
+            assert_eq!(
+                verdict.scope("xmip:///n"),
+                format!("xmip:///n/{}/tcp/json", stage.name())
+            );
+        }
+    }
+
+    #[test]
     fn a_one_sided_transport_is_yellow_not_red() {
         let verdict = Verdict {
+            stage: Stage::Send,
             transport: "mdns".to_string(),
             contract: Contract::Bytes,
             outcome: Outcome::OneSided("receive only".to_string()),
@@ -203,6 +253,7 @@ mod tests {
     #[test]
     fn a_failure_is_red_and_carries_the_reason() {
         let verdict = Verdict {
+            stage: Stage::Process,
             transport: "tcp".to_string(),
             contract: Contract::Bytes,
             outcome: Outcome::Failed("connection refused".to_string()),

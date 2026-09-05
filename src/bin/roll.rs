@@ -20,13 +20,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use xmip_observe::{Health, History, Snapshot};
-use xmip_test_playground::{CONTRACTS, Schedule, history_toml, to_toml, write_atomic};
+use xmip_test_playground::{FaultPlan, Schedule, history_toml, to_toml, write_atomic};
 
 fn main() {
     let node = "xmip:///playground";
     let file_dir = std::env::temp_dir().join("playground");
     std::fs::remove_dir_all(&file_dir).ok();
-    let mut schedule = Schedule::new(node, &file_dir);
+
+    // The world does not run green: inject the transport, addressing,
+    // authentication and contract faults a real integration suffers, on Receive,
+    // Process and Send. `file` is left clean, one transport that stays green.
+    let mut schedule = Schedule::new(node, &file_dir).with_faults(FaultPlan::realistic());
 
     // An hour of history at one point a second: enough to watch a shift, bounded
     // so a week-long run does not grow. ADR-0029.
@@ -105,11 +109,10 @@ fn redraw(node: &str, round: u64, snapshot: &Snapshot) {
     for record in pairs(node, snapshot) {
         let pair = record
             .scope
-            .rsplit("/exercise/")
-            .next()
+            .strip_prefix(&format!("{node}/"))
             .unwrap_or(&record.scope);
         println!(
-            "  {:<22} {:<7} sev {:>3}   {}",
+            "  {:<28} {:<7} sev {:>3}   {}",
             pair,
             word(record.health),
             record.severity,
@@ -140,18 +143,14 @@ fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
 }
 
 fn pairs(node: &str, snapshot: &Snapshot) -> Vec<xmip_observe::HealthRecord> {
-    let mut records = snapshot.health(&format!("{node}/exercise"));
+    let mut records = snapshot.health(node);
     records.sort_by(|left, right| left.scope.cmp(&right.scope));
     records
 }
 
 fn rollup(node: &str, snapshot: &Snapshot, pairs: usize) -> String {
     let worst = snapshot.worst(node).map_or("NONE", word);
-    let contracts = CONTRACTS.len();
-    let transports = if contracts == 0 { 0 } else { pairs / contracts };
-    format!(
-        "rollup at {node}: {worst}   ({transports} transports × {contracts} contracts = {pairs} pairs)"
-    )
+    format!("rollup at {node}: {worst}   ({pairs} verdicts across receive, process and send)")
 }
 
 fn word(health: Health) -> &'static str {

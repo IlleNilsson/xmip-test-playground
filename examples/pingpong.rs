@@ -28,20 +28,19 @@ fn main() {
     }
     let elapsed = started.elapsed();
 
-    let exercise = format!("{node}/exercise");
-    let mut records = latest.health(&exercise);
+    let mut records = latest.health(node);
     records.sort_by(|left, right| left.scope.cmp(&right.scope));
 
     println!();
-    println!("pingpong test — {rounds} rounds over every transport × contract");
+    println!("pingpong test — {rounds} rounds over every stage, transport and contract");
     println!("{:-<74}", "");
     for record in &records {
         let pair = record
             .scope
-            .strip_prefix(&format!("{exercise}/"))
+            .strip_prefix(&format!("{node}/"))
             .unwrap_or(&record.scope);
         println!(
-            "  {:<22} {:<7} sev {:>3}   {}",
+            "  {:<28} {:<7} sev {:>3}   {}",
             pair,
             word(record.health),
             record.severity,

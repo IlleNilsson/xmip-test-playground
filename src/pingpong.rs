@@ -4,20 +4,25 @@
 //! transport is the variable and the scenario is the constant. Send the
 //! contract's Stream, take what returned, check it matches and the contract
 //! holds over it. ADR-0028.
+//!
+//! It returns the *base* outcome of the real exchange and how many bytes moved.
+//! The [`Schedule`](crate::Schedule) expands that into a verdict per message-path
+//! stage — Receive, Process, Send — and injects the faults a real integration
+//! suffers, since loopback itself never fails.
 
 use xmip_core::StreamId;
 use xmip_stream::Stream;
 
 use crate::roundtrip::{Exchange, RoundTrip};
-use crate::verdict::{Contract, Outcome, Verdict};
+use crate::verdict::{Contract, Outcome};
 
 /// Run one pingpong round for one transport and one contract, and judge it.
 ///
 /// The probe sends an actual Stream; on a clean round trip the arrived bytes are
-/// rebuilt into a Stream and the real contract is run over it. Delivered means
-/// both: the bytes came back whole and the contract held.
+/// rebuilt into a Stream and the real contract is run over it. Returns the base
+/// outcome and the bytes that moved (zero unless delivered).
 #[must_use]
-pub fn ping_pong(transport: &dyn RoundTrip, contract: Contract, now: i64) -> Verdict {
+pub fn ping_pong(transport: &dyn RoundTrip, contract: Contract) -> (Outcome, u64) {
     let stream = contract.stream();
     let payload = stream.bytes().to_vec();
 
@@ -47,13 +52,7 @@ pub fn ping_pong(transport: &dyn RoundTrip, contract: Contract, now: i64) -> Ver
         0
     };
 
-    Verdict {
-        transport: transport.transport().to_string(),
-        contract,
-        outcome,
-        bytes,
-        observed_unix_nanos: now,
-    }
+    (outcome, bytes)
 }
 
 #[cfg(test)]
@@ -70,10 +69,10 @@ mod tests {
     #[test]
     fn a_payload_that_makes_the_round_trip_over_file_is_delivered() {
         let dir = scratch("delivered");
-        let verdict = ping_pong(&FileRoundTrip::new(&dir), Contract::Text, 1);
+        let (outcome, bytes) = ping_pong(&FileRoundTrip::new(&dir), Contract::Text);
 
-        assert_eq!(verdict.outcome, Outcome::Delivered);
-        assert_eq!(verdict.bytes, Contract::Text.payload().len() as u64);
+        assert_eq!(outcome, Outcome::Delivered);
+        assert_eq!(bytes, Contract::Text.payload().len() as u64);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -81,9 +80,8 @@ mod tests {
     fn the_same_scenario_runs_over_tcp() {
         // The point of the RoundTrip adapter: one scenario, a different
         // transport underneath, no change here.
-        let verdict = ping_pong(&TcpRoundTrip::new(), Contract::Bytes, 1);
+        let (outcome, _) = ping_pong(&TcpRoundTrip::new(), Contract::Bytes);
 
-        assert_eq!(verdict.transport, "tcp");
-        assert_eq!(verdict.outcome, Outcome::Delivered);
+        assert_eq!(outcome, Outcome::Delivered);
     }
 }
