@@ -13,7 +13,7 @@ use std::io;
 use std::path::Path;
 
 use serde_json::{Value, json};
-use xmip_observe::{Counted, Health, Snapshot};
+use xmip_observe::{Counted, Health, History, Snapshot};
 
 /// The snapshot beneath `node`, as the JSON the GUI's file surface reads:
 /// health records and the node's throughput counts.
@@ -52,6 +52,32 @@ pub fn to_json(node: &str, snapshot: &Snapshot) -> String {
         "node": node,
         "records": records,
         "counts": counts,
+    });
+
+    serde_json::to_string_pretty(&document).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// The node's throughput over time, as the JSON the history cmdlet and UI read:
+/// one series per counted kind, oldest point first. ADR-0029.
+#[must_use]
+pub fn history_json(node: &str, history: &History) -> String {
+    let series = |counted: Counted| -> Vec<Value> {
+        history
+            .count_series(node, counted)
+            .into_iter()
+            .map(|point| {
+                json!({ "observedUnixNanos": point.observed_unix_nanos, "value": point.value })
+            })
+            .collect()
+    };
+
+    let document = json!({
+        "node": node,
+        "series": {
+            "streams": series(Counted::Streams),
+            "messages": series(Counted::Messages),
+            "bytes": series(Counted::Bytes),
+        },
     });
 
     serde_json::to_string_pretty(&document).unwrap_or_else(|_| "{}".to_string())

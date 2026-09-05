@@ -18,8 +18,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use xmip_observe::{Health, Snapshot};
-use xmip_test_playground::{CONTRACTS, Schedule, to_json, write_atomic};
+use xmip_observe::{Health, History, Snapshot};
+use xmip_test_playground::{CONTRACTS, Schedule, history_json, to_json, write_atomic};
 
 fn main() {
     let node = "xmip:///playground";
@@ -27,24 +27,38 @@ fn main() {
     std::fs::remove_dir_all(&file_dir).ok();
     let mut schedule = Schedule::new(node, &file_dir);
 
+    // An hour of history at one point a second: enough to watch a shift, bounded
+    // so a week-long run does not grow. ADR-0029.
+    let mut history = History::with_capacity(3600);
+
     let snapshot_path = snapshot_path();
+    let history_path = history_path();
     let limit: Option<u64> = std::env::args().nth(1).and_then(|arg| arg.parse().ok());
     let live = std::io::stdout().is_terminal();
     let interval = Duration::from_millis(1000);
 
     if !live {
         println!("publishing snapshots to {}", snapshot_path.display());
+        println!("publishing history to   {}", history_path.display());
     }
 
     let mut round: u64 = 0;
     loop {
         round += 1;
         let snapshot = schedule.tick();
+        history.record(&snapshot);
 
         if let Err(error) = write_atomic(&snapshot_path, &to_json(node, &snapshot)) {
             eprintln!(
                 "could not write the snapshot to {}: {error}",
                 snapshot_path.display()
+            );
+        }
+
+        if let Err(error) = write_atomic(&history_path, &history_json(node, &history)) {
+            eprintln!(
+                "could not write the history to {}: {error}",
+                history_path.display()
             );
         }
 
@@ -69,6 +83,14 @@ fn main() {
 fn snapshot_path() -> PathBuf {
     std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
         || std::env::temp_dir().join("xmip-playground-snapshot.json"),
+        PathBuf::from,
+    )
+}
+
+/// Where the throughput history is written for the CLI and UI to read.
+fn history_path() -> PathBuf {
+    std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
+        || std::env::temp_dir().join("xmip-playground-history.json"),
         PathBuf::from,
     )
 }
