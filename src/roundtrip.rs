@@ -13,10 +13,9 @@
 //! in mind is exactly this: a new transport is a new adapter, not a new
 //! scenario.
 
-use std::net::TcpStream;
 use std::time::Duration;
 
-use xmip_transport::{FileTransport, TcpTransport, Transport};
+use xmip_transport::{FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport};
 
 /// What one round returned.
 pub enum Exchange {
@@ -114,26 +113,117 @@ impl RoundTrip for TcpRoundTrip {
         };
 
         // The sender is another thread: connect to the bound address and send.
-        // TcpStream carries the send directly — TcpTransport::send would work
-        // too, but the raw stream keeps the sender half small.
+        let payload = payload.to_vec();
+        let sender =
+            std::thread::spawn(move || TcpTransport::new("127.0.0.1:0").send(&address, &payload));
+
+        let caught = far_end.accept_one(&listener);
+
+        let sent = sender.join();
+
+        judge(caught, sent)
+    }
+}
+
+/// HTTP: bind a listener, send the payload as a request body from another
+/// thread, accept the one request and read the body back. The tcp shape with
+/// HTTP framing on top — the server writes a response, so the sender's `send`
+/// completes rather than blocking on a reply.
+pub struct HttpRoundTrip;
+
+impl HttpRoundTrip {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for HttpRoundTrip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoundTrip for HttpRoundTrip {
+    fn transport(&self) -> &'static str {
+        "http"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = HttpTransport::new("127.0.0.1:0");
+
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+
         let payload = payload.to_vec();
         let sender = std::thread::spawn(move || {
-            use std::io::Write;
-            let mut stream = TcpStream::connect(&address)?;
-            stream.write_all(&payload)?;
-            stream.flush()
+            HttpTransport::new("127.0.0.1:0").send(&format!("http://{address}/pingpong"), &payload)
         });
 
         let caught = far_end.accept_one(&listener);
 
         let sent = sender.join();
 
-        match (caught, sent) {
-            (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
-            (Err(error), _) => Exchange::Failed(format!("accept failed: {error}")),
-            (_, Ok(Err(error))) => Exchange::Failed(format!("send failed: {error}")),
-            (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
-        }
+        judge(caught, sent)
+    }
+}
+
+/// SMTP: bind a receiver, relay the payload as one message from another thread,
+/// accept the one session and read the message body back.
+pub struct SmtpRoundTrip;
+
+impl SmtpRoundTrip {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SmtpRoundTrip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoundTrip for SmtpRoundTrip {
+    fn transport(&self) -> &'static str {
+        "smtp"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = SmtpTransport::receiving("127.0.0.1:0");
+
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+
+        let payload = payload.to_vec();
+        let sender = std::thread::spawn(move || {
+            SmtpTransport::sending(address, "xmip@example.com")
+                .send("mailto:pingpong@example.com", &payload)
+        });
+
+        let caught = far_end.accept_one(&listener);
+
+        let sent = sender.join();
+
+        judge(caught, sent)
+    }
+}
+
+/// The verdict every listen/accept transport reaches the same way: the payload
+/// came back iff both the receive and the send half succeeded.
+type Sent = std::thread::Result<xmip_transport::Result<()>>;
+
+fn judge(caught: xmip_transport::Result<xmip_transport::Arrived>, sent: Sent) -> Exchange {
+    match (caught, sent) {
+        (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
+        (Err(error), _) => Exchange::Failed(format!("accept failed: {error}")),
+        (_, Ok(Err(error))) => Exchange::Failed(format!("send failed: {error}")),
+        (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
     }
 }
 
@@ -176,6 +266,26 @@ mod tests {
 
         match rt.exchange(&payload) {
             Exchange::Returned(bytes) => assert_eq!(bytes, payload),
+            other => panic!("expected Returned, got {}", label(&other)),
+        }
+    }
+
+    #[test]
+    fn http_round_trips_a_body() {
+        let rt = HttpRoundTrip::new();
+
+        match rt.exchange(b"<order/>") {
+            Exchange::Returned(bytes) => assert_eq!(bytes, b"<order/>"),
+            other => panic!("expected Returned, got {}", label(&other)),
+        }
+    }
+
+    #[test]
+    fn smtp_round_trips_a_message() {
+        let rt = SmtpRoundTrip::new();
+
+        match rt.exchange(b"Subject: ping\r\n\r\npong") {
+            Exchange::Returned(bytes) => assert_eq!(bytes, b"Subject: ping\r\n\r\npong"),
             other => panic!("expected Returned, got {}", label(&other)),
         }
     }

@@ -15,10 +15,11 @@
 //! varies under the test.
 //!
 //! Xmip's own transports are the far end, so nothing external is stood up and
-//! the Playground runs on a laptop with no network. File ping-pongs over one
-//! directory and tcp over a loopback socket today, each behind one [`RoundTrip`]
-//! adapter; the remaining socket transports (udp, http, smtp) join by adding
-//! their adapter — the scenario does not change.
+//! the Playground runs on a laptop with no network. File, tcp, http and smtp
+//! ping-pong today — file over a directory, the sockets over a loopback
+//! connection — each behind one [`RoundTrip`] adapter, so the scenario is one
+//! thing over all of them. udp joins once the transport reports the address it
+//! bound to; a new transport is a new adapter, not a new test.
 //!
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
@@ -29,6 +30,8 @@ pub mod schedule;
 pub mod verdict;
 
 pub use pingpong::ping_pong;
-pub use roundtrip::{Exchange, FileRoundTrip, RoundTrip, TcpRoundTrip};
+pub use roundtrip::{
+    Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip,
+};
 pub use schedule::{CONTRACTS, Schedule};
 pub use verdict::{Contract, Outcome, Verdict};
