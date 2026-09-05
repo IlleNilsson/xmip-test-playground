@@ -8,9 +8,9 @@
 
 use std::time::Instant;
 
-use xmip_core::StreamId;
-use xmip_observe::Health;
-use xmip_stream::Stream;
+use observe::Health;
+use stream::Stream;
+use xcore::StreamId;
 use xmip_test_playground::{Contract, Schedule};
 
 fn main() {

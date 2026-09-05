@@ -25,16 +25,16 @@ path = "src/lib.rs"
 # The transports it ping-pongs over, and the snapshot it publishes verdicts
 # into. observe carries Health; transport carries the Transport trait whose
 # send/receive is the round trip.
-xmip-observe = { package = "xmip-core-observe", git = "https://github.com/IlleNilsson/xmip-core-observe", branch = "main" }
-xmip-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+observe = { package = "xmip-core-observe", git = "https://github.com/IlleNilsson/xmip-core-observe", branch = "main" }
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
 # contract held. stream carries the immutable content, core the StreamId,
 # contract the Contract trait the playground's validators implement.
-xmip-stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
-xmip-core = { git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
-xmip-contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
+stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/xmip-core-stream", branch = "main" }
+xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
 
 # The one real parser the content contracts lean on. JSON well-formedness is a
 # genuine check, not a byte comparison, which is the point of exercising a

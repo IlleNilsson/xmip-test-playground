@@ -5,10 +5,10 @@
 //! payload went out, came back and matched; red when it did not, with the
 //! reason as evidence.
 
-use xmip_contract::Contract as ContractTrait;
-use xmip_core::StreamId;
-use xmip_observe::{Health, HealthRecord};
-use xmip_stream::Stream;
+use contract::Contract as ContractTrait;
+use observe::{Health, HealthRecord};
+use stream::Stream;
+use xcore::StreamId;
 
 use crate::contracts::{ContentContract, Shape};
 

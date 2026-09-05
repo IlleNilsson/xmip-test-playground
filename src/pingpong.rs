@@ -10,8 +10,8 @@
 //! stage — Receive, Process, Send — and injects the faults a real integration
 //! suffers, since loopback itself never fails.
 
-use xmip_core::StreamId;
-use xmip_stream::Stream;
+use stream::Stream;
+use xcore::StreamId;
 
 use crate::roundtrip::{Exchange, RoundTrip};
 use crate::verdict::{Contract, Outcome};

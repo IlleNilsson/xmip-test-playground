@@ -2,7 +2,7 @@
 //!
 //! ADR-0028's contract axis, made real: a probe does not just send bytes and
 //! compare them back, it sends an actual [`Stream`] and, on arrival, a real
-//! [`xmip_contract::Contract`] validates it. A pair is delivered only if the
+//! [`contract::Contract`] validates it. A pair is delivered only if the
 //! bytes round-tripped *and* the contract held — which is the difference between
 //! testing a transport and testing an integration. JSON well-formedness leans on
 //! a real parser; XML on a small well-formedness scan; text and html on lighter
@@ -13,11 +13,11 @@
 //! against those instead — the shape here is deliberately the estate's Contract
 //! trait so that swap is a move, not a rewrite.
 
-use serde_json::Value;
-use xmip_contract::{
+use contract::{
     Contract, ContractDescriptor, ContractError, ContractId, ValidationIssue, ValidationResult,
 };
-use xmip_stream::Stream;
+use serde_json::Value;
+use stream::Stream;
 
 /// The content shape a contract holds a Stream to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,7 +172,7 @@ fn has_markup(bytes: &[u8]) -> Vec<ValidationIssue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xmip_core::StreamId;
+    use xcore::StreamId;
 
     fn stream(shape: Shape, bytes: &[u8]) -> Stream {
         Stream::new(

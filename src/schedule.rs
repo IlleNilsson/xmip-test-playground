@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use xmip_observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
+use observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
 
 use crate::fault::FaultPlan;
 use crate::pingpong::ping_pong;
@@ -332,7 +332,7 @@ fn now_unix_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xmip_observe::Health;
+    use observe::Health;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("xmip-schedule-{name}"));

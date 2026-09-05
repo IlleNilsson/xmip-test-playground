@@ -15,8 +15,8 @@
 use std::io;
 use std::path::Path;
 
+use observe::{Activity, Counted, Health, History, ItemKind, Snapshot};
 use serde::Serialize;
-use xmip_observe::{Activity, Counted, Health, History, ItemKind, Snapshot};
 
 #[derive(Serialize)]
 struct SnapshotReport {

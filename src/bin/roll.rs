@@ -19,7 +19,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use xmip_observe::{Health, History, Snapshot};
+use observe::{Health, History, Snapshot};
 use xmip_test_playground::{
     FaultPlan, Schedule, activity_toml, history_toml, to_toml, write_atomic,
 };
@@ -161,7 +161,7 @@ fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
     println!("round {round:>4}: {worst}  ({count} pairs){trouble}");
 }
 
-fn pairs(node: &str, snapshot: &Snapshot) -> Vec<xmip_observe::HealthRecord> {
+fn pairs(node: &str, snapshot: &Snapshot) -> Vec<observe::HealthRecord> {
     let mut records = snapshot.health(node);
     records.sort_by(|left, right| left.scope.cmp(&right.scope));
     records

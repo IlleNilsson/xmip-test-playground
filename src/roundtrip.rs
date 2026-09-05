@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use xmip_transport::{
+use transport::{
     FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport, UdpTransport,
     WebSocketTransport,
 };
@@ -313,9 +313,9 @@ impl RoundTrip for UdpRoundTrip {
 
 /// The verdict every listen/accept transport reaches the same way: the payload
 /// came back iff both the receive and the send half succeeded.
-type Sent = std::thread::Result<xmip_transport::Result<()>>;
+type Sent = std::thread::Result<transport::Result<()>>;
 
-fn judge(caught: xmip_transport::Result<xmip_transport::Arrived>, sent: Sent) -> Exchange {
+fn judge(caught: transport::Result<transport::Arrived>, sent: Sent) -> Exchange {
     match (caught, sent) {
         (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
         (Err(error), _) => Exchange::Failed(format!("accept failed: {error}")),
