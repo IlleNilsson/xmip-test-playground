@@ -38,8 +38,15 @@ xmip-contract = { package = "xmip-core-contract", git = "https://github.com/Ille
 
 # The one real parser the content contracts lean on. JSON well-formedness is a
 # genuine check, not a byte comparison, which is the point of exercising a
-# contract rather than a transport.
+# contract rather than a transport — JSON as content, which is exactly the case
+# the estate keeps for it.
 serde_json = "1"
+
+# The snapshot and history files are written in TOML: on disk is TOML across the
+# estate, JSON is reserved for memory and the wire (the owner's rule). serde
+# derives the shapes; toml serialises them.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [lints.rust]
 # forbid, not deny: a module has no business writing unsafe. The one exception

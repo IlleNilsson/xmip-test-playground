@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use xmip_observe::{Health, History, Snapshot};
-use xmip_test_playground::{CONTRACTS, Schedule, history_json, to_json, write_atomic};
+use xmip_test_playground::{CONTRACTS, Schedule, history_toml, to_toml, write_atomic};
 
 fn main() {
     let node = "xmip:///playground";
@@ -48,14 +48,14 @@ fn main() {
         let snapshot = schedule.tick();
         history.record(&snapshot);
 
-        if let Err(error) = write_atomic(&snapshot_path, &to_json(node, &snapshot)) {
+        if let Err(error) = write_atomic(&snapshot_path, &to_toml(node, &snapshot)) {
             eprintln!(
                 "could not write the snapshot to {}: {error}",
                 snapshot_path.display()
             );
         }
 
-        if let Err(error) = write_atomic(&history_path, &history_json(node, &history)) {
+        if let Err(error) = write_atomic(&history_path, &history_toml(node, &history)) {
             eprintln!(
                 "could not write the history to {}: {error}",
                 history_path.display()
@@ -82,7 +82,7 @@ fn main() {
 /// or the well-known temp file the GUI defaults to as well.
 fn snapshot_path() -> PathBuf {
     std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
-        || std::env::temp_dir().join("xmip-playground-snapshot.json"),
+        || std::env::temp_dir().join("xmip-playground-snapshot.toml"),
         PathBuf::from,
     )
 }
@@ -90,7 +90,7 @@ fn snapshot_path() -> PathBuf {
 /// Where the throughput history is written for the CLI and UI to read.
 fn history_path() -> PathBuf {
     std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
-        || std::env::temp_dir().join("xmip-playground-history.json"),
+        || std::env::temp_dir().join("xmip-playground-history.toml"),
         PathBuf::from,
     )
 }
