@@ -5,8 +5,9 @@
 //! It runs the **pingpong test** — one integration test, over time, across the
 //! whole estate: not a test per protocol or per contract but a single test
 //! whose subject is every transport by every content contract at once. On a
-//! Schedule it sends a payload, catches it and checks it came back whole, for
-//! every pair, and folds each round into a running tally. Each pair is a leaf
+//! Schedule it sends an actual Stream, catches it, checks it came back whole and
+//! that the content contract holds over it — delivered means both — for every
+//! pair, and folds each round into a running tally. Each pair is a leaf
 //! of the one test and rolls up to a single state at
 //! `xmip:///<node>/exercise`, so an operator sees one green — or the one pair
 //! that broke. What it publishes is the record over time, not the last round;
@@ -25,11 +26,13 @@
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
+pub mod contracts;
 pub mod pingpong;
 pub mod roundtrip;
 pub mod schedule;
 pub mod verdict;
 
+pub use contracts::{ContentContract, Shape};
 pub use pingpong::ping_pong;
 pub use roundtrip::{
     Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,

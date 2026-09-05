@@ -45,7 +45,13 @@ impl Tally {
 
 /// Every contract the playground exercises today. Grows as the content modules
 /// land; ADR-0028's matrix is every transport by every one of these.
-pub const CONTRACTS: [Contract; 3] = [Contract::Bytes, Contract::Text, Contract::Html];
+pub const CONTRACTS: [Contract; 5] = [
+    Contract::Bytes,
+    Contract::Text,
+    Contract::Json,
+    Contract::Xml,
+    Contract::Html,
+];
 
 /// A scheduled exercise of the estate's transports. Holds one [`RoundTrip`]
 /// adapter per transport and, on each tick, runs the scenario over every

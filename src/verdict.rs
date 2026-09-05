@@ -5,22 +5,31 @@
 //! payload went out, came back and matched; red when it did not, with the
 //! reason as evidence.
 
+use xmip_contract::Contract as ContractTrait;
+use xmip_core::StreamId;
 use xmip_observe::{Health, HealthRecord};
+use xmip_stream::Stream;
+
+use crate::contracts::{ContentContract, Shape};
 
 /// The content a probe sends and expects back. The matrix's second axis;
-/// ADR-0028 exercises every transport by every contract. It starts with the
-/// contracts that need no module — raw bytes, UTF-8 text, and an HTML document
-/// as a representation carried over any transport — and grows as the content
-/// modules land. HTML is a representation, not a transport (ADR-0010): it rides
-/// on the contract axis and so is exercised over all six transports at once.
+/// ADR-0028 exercises every transport by every contract. Each carries an actual
+/// [`Stream`] and a real [`ContentContract`] that must hold on arrival — bytes
+/// with no structural claim, UTF-8 text, well-formed JSON and XML, and HTML
+/// markup. It grows as the estate's own content modules land. A representation is
+/// not a transport (ADR-0010): each rides the contract axis and is exercised
+/// over every transport at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Contract {
-    /// Arbitrary bytes, returned unchanged.
+    /// Arbitrary bytes, returned unchanged. No structural claim.
     Bytes,
-    /// UTF-8 text, returned unchanged.
+    /// UTF-8 text.
     Text,
-    /// An HTML document, returned unchanged. A `xmip-message-html`
-    /// representation once that module lands; a byte round trip until then.
+    /// Well-formed JSON.
+    Json,
+    /// Well-formed XML.
+    Xml,
+    /// HTML markup.
     Html,
 }
 
@@ -31,17 +40,70 @@ impl Contract {
         match self {
             Contract::Bytes => "bytes",
             Contract::Text => "text",
+            Contract::Json => "json",
+            Contract::Xml => "xml",
             Contract::Html => "html",
         }
     }
 
-    /// The payload this contract sends. What comes back must equal it.
+    /// The content shape this contract holds its Stream to.
+    #[must_use]
+    pub const fn shape(self) -> Shape {
+        match self {
+            Contract::Bytes => Shape::Bytes,
+            Contract::Text => Shape::Text,
+            Contract::Json => Shape::Json,
+            Contract::Xml => Shape::Xml,
+            Contract::Html => Shape::Html,
+        }
+    }
+
+    /// The payload this contract sends. What comes back must equal it, and the
+    /// contract must hold over it.
     #[must_use]
     pub fn payload(self) -> Vec<u8> {
         match self {
             Contract::Bytes => vec![0x00, 0x01, 0x02, 0xfd, 0xfe, 0xff],
             Contract::Text => b"xmip ping-pong".to_vec(),
+            Contract::Json => br#"{"probe":"ping-pong","n":1}"#.to_vec(),
+            Contract::Xml => b"<probe><n>1</n>ping-pong</probe>".to_vec(),
             Contract::Html => b"<!doctype html><title>xmip</title><p>ping-pong".to_vec(),
+        }
+    }
+
+    /// The actual Stream a probe sends: the payload, tagged with the media type
+    /// the contract declares.
+    #[must_use]
+    pub fn stream(self) -> Stream {
+        Stream::new(
+            StreamId::new(1),
+            self.payload(),
+            Some(self.shape().representation().to_string()),
+        )
+    }
+
+    /// Run the real contract over an arrived Stream. `Ok` when it held; `Err`
+    /// with the first issue when it did not.
+    ///
+    /// # Errors
+    ///
+    /// When the Stream is not identified as this contract's, or fails validation.
+    pub fn validate(self, arrived: &Stream) -> Result<(), String> {
+        let contract = ContentContract::new(self.name(), self.shape());
+
+        match contract.identify(arrived) {
+            Ok(true) => {}
+            Ok(false) => return Err("the arrived Stream is not this contract's".to_string()),
+            Err(error) => return Err(format!("identify failed: {error}")),
+        }
+
+        match contract.validate(arrived) {
+            Ok(result) if result.valid => Ok(()),
+            Ok(result) => Err(result
+                .issues
+                .first()
+                .map_or_else(|| "invalid".to_string(), |issue| issue.message.clone())),
+            Err(error) => Err(format!("validation failed: {error}")),
         }
     }
 }

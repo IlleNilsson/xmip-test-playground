@@ -8,8 +8,10 @@
 
 use std::time::Instant;
 
+use xmip_core::StreamId;
 use xmip_observe::Health;
-use xmip_test_playground::Schedule;
+use xmip_stream::Stream;
+use xmip_test_playground::{Contract, Schedule};
 
 fn main() {
     let node = "xmip:///playground";
@@ -55,7 +57,43 @@ fn main() {
     );
     println!();
 
+    demonstrate_contracts_bite();
+
     std::fs::remove_dir_all(&file_dir).ok();
+}
+
+/// The point of validating a Stream rather than comparing bytes: a malformed
+/// Stream is a contract violation, not a pass. This shows each real contract
+/// holding a good Stream and rejecting a bad one.
+fn demonstrate_contracts_bite() {
+    println!("contract validation — a malformed Stream must not pass");
+    println!("{:-<74}", "");
+    let cases = [
+        (Contract::Json, &br#"{"ok":true}"#[..], &b"{not json"[..]),
+        (Contract::Xml, &b"<a><b/></a>"[..], &b"<a><b></a>"[..]),
+        (
+            Contract::Text,
+            "xmip \u{2713}".as_bytes(),
+            &[0xff, 0xfe][..],
+        ),
+    ];
+    for (contract, good, bad) in cases {
+        show(contract, "well-formed", good);
+        show(contract, "malformed  ", bad);
+    }
+    println!();
+}
+
+fn show(contract: Contract, label: &str, bytes: &[u8]) {
+    let stream = Stream::new(
+        StreamId::new(1),
+        bytes.to_vec(),
+        Some(contract.shape().representation().to_string()),
+    );
+    match contract.validate(&stream) {
+        Ok(()) => println!("  {:<5} {label}   HELD", contract.name()),
+        Err(why) => println!("  {:<5} {label}   VIOLATED — {why}", contract.name()),
+    }
 }
 
 fn word(health: Health) -> &'static str {
