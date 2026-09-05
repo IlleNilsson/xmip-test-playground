@@ -15,7 +15,9 @@
 
 use std::time::Duration;
 
-use xmip_transport::{FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport};
+use xmip_transport::{
+    FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport, UdpTransport,
+};
 
 /// What one round returned.
 pub enum Exchange {
@@ -214,6 +216,55 @@ impl RoundTrip for SmtpRoundTrip {
     }
 }
 
+/// UDP: bind the receiving socket first (a datagram fired before the receiver
+/// is bound is dropped silently), learn its address, fire one datagram from
+/// another thread, receive it. A read timeout keeps a lost datagram from
+/// hanging the round — UDP has no delivery guarantee.
+pub struct UdpRoundTrip {
+    receive_timeout: Duration,
+}
+
+impl UdpRoundTrip {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            receive_timeout: Duration::from_secs(2),
+        }
+    }
+}
+
+impl Default for UdpRoundTrip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoundTrip for UdpRoundTrip {
+    fn transport(&self) -> &'static str {
+        "udp"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = UdpTransport::new("127.0.0.1:0").timing_out_after(self.receive_timeout);
+
+        // Bind before the sender fires, or the datagram is gone.
+        let (socket, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+
+        let payload = payload.to_vec();
+        let sender =
+            std::thread::spawn(move || UdpTransport::new("127.0.0.1:0").send(&address, &payload));
+
+        let caught = far_end.receive_one(&socket);
+
+        let sent = sender.join();
+
+        judge(caught, sent)
+    }
+}
+
 /// The verdict every listen/accept transport reaches the same way: the payload
 /// came back iff both the receive and the send half succeeded.
 type Sent = std::thread::Result<xmip_transport::Result<()>>;
@@ -286,6 +337,17 @@ mod tests {
 
         match rt.exchange(b"Subject: ping\r\n\r\npong") {
             Exchange::Returned(bytes) => assert_eq!(bytes, b"Subject: ping\r\n\r\npong"),
+            other => panic!("expected Returned, got {}", label(&other)),
+        }
+    }
+
+    #[test]
+    fn udp_round_trips_a_datagram() {
+        let rt = UdpRoundTrip::new();
+        let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
+
+        match rt.exchange(&payload) {
+            Exchange::Returned(bytes) => assert_eq!(bytes, payload),
             other => panic!("expected Returned, got {}", label(&other)),
         }
     }

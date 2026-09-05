@@ -17,7 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use xmip_observe::{Health, HealthRecord, Snapshot};
 
 use crate::pingpong::ping_pong;
-use crate::roundtrip::{FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip};
+use crate::roundtrip::{
+    FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
+};
 use crate::verdict::{Contract, Outcome, Verdict};
 
 /// One pair's record over time: how many rounds it has run, how many failed,
@@ -48,12 +50,11 @@ pub const CONTRACTS: [Contract; 2] = [Contract::Bytes, Contract::Text];
 /// adapter per transport and, on each tick, runs the scenario over every
 /// adapter by every contract and publishes what it found.
 ///
-/// File, tcp, http and smtp are wired today: file ping-pongs over one directory
-/// with no port to coordinate, the sockets over a real loopback connection. udp
-/// joins once the transport can report the address it bound to (it binds a fresh
-/// socket per receive today, so the sender cannot learn where to aim). A
-/// transport not yet wired is simply absent from the tick rather than reported
-/// as failing.
+/// Every transport the estate implements is wired: file ping-pongs over one
+/// directory, tcp/http/smtp over a loopback connection, udp over a loopback
+/// datagram. A transport declared but not yet implemented (websocket and the
+/// rest) is simply absent from the tick rather than reported as failing, and
+/// joins by adding its adapter here.
 pub struct Schedule {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
@@ -70,6 +71,7 @@ impl Schedule {
             Box::new(TcpRoundTrip::new()),
             Box::new(HttpRoundTrip::new()),
             Box::new(SmtpRoundTrip::new()),
+            Box::new(UdpRoundTrip::new()),
         ];
 
         Self {
