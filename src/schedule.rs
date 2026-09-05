@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use xmip_observe::{Health, HealthRecord, Snapshot};
-use xmip_transport::FileTransport;
 
 use crate::pingpong::ping_pong;
+use crate::roundtrip::{FileRoundTrip, RoundTrip, TcpRoundTrip};
 use crate::verdict::{Contract, Outcome, Verdict};
 
 /// One pair's record over time: how many rounds it has run, how many failed,
@@ -44,28 +44,35 @@ impl Tally {
 /// land; ADR-0028's matrix is every transport by every one of these.
 pub const CONTRACTS: [Contract; 2] = [Contract::Bytes, Contract::Text];
 
-/// A scheduled exercise of the estate's transports. Holds where each
-/// self-contained transport ping-pongs — a directory for file — and, on each
-/// tick, runs the scenario and publishes what it found.
+/// A scheduled exercise of the estate's transports. Holds one [`RoundTrip`]
+/// adapter per transport and, on each tick, runs the scenario over every
+/// adapter by every contract and publishes what it found.
 ///
-/// Only the file transport is wired today: it ping-pongs over one directory
-/// with no port to coordinate. The socket transports (tcp, udp, http, smtp)
-/// join as the scenario learns each one's bind-and-accept, and until then they
-/// are simply absent from the tick rather than reported as failing.
+/// File and tcp are wired today: file ping-pongs over one directory with no
+/// port to coordinate, tcp over a real loopback socket. The remaining socket
+/// transports (udp, http, smtp) join by adding their adapter to this list —
+/// the scenario and the schedule do not change, which is the whole point of the
+/// adapter. A transport not yet wired is simply absent from the tick rather
+/// than reported as failing.
 pub struct Schedule {
     node: String,
-    file_dir: std::path::PathBuf,
+    transports: Vec<Box<dyn RoundTrip>>,
     tallies: BTreeMap<String, Tally>,
 }
 
 impl Schedule {
-    /// A schedule publishing under `node`, running the pingpong test on the
-    /// file transport in `file_dir`.
+    /// A schedule publishing under `node`, running the pingpong test over every
+    /// wired transport. `file_dir` is where the file transport ping-pongs.
     #[must_use]
     pub fn new(node: impl Into<String>, file_dir: impl Into<std::path::PathBuf>) -> Self {
+        let transports: Vec<Box<dyn RoundTrip>> = vec![
+            Box::new(FileRoundTrip::new(file_dir)),
+            Box::new(TcpRoundTrip::new()),
+        ];
+
         Self {
             node: node.into(),
-            file_dir: file_dir.into(),
+            transports,
             tallies: BTreeMap::new(),
         }
     }
@@ -86,15 +93,18 @@ impl Schedule {
         snapshot
     }
 
-    /// The verdicts of one round, before they fold into the tallies. Separated
-    /// so a test can read them directly.
+    /// The verdicts of one round — every wired transport by every contract —
+    /// before they fold into the tallies. Separated so a test can read them
+    /// directly.
     #[must_use]
     pub fn run_once(&self, now: i64) -> Vec<Verdict> {
-        let file = FileTransport::new(&self.file_dir);
-
-        CONTRACTS
+        self.transports
             .iter()
-            .map(|&contract| ping_pong(&file, contract, now))
+            .flat_map(|transport| {
+                CONTRACTS
+                    .iter()
+                    .map(move |&contract| ping_pong(transport.as_ref(), contract, now))
+            })
             .collect()
     }
 
