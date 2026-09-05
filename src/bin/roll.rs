@@ -9,10 +9,10 @@
 //! roll until interrupted. When stdout is a terminal the board is redrawn in
 //! place; when it is piped, one summary line per round is appended instead.
 //!
-//! After every tick it writes the snapshot to a JSON file the monitoring GUI
+//! After every tick it writes the snapshot to a TOML file the monitoring GUI
 //! reads, so an operator watches the same matrix in the web or desktop UI over
-//! time. The path is `XMIP_PLAYGROUND_SNAPSHOT` if set, else a well-known temp
-//! file the GUI defaults to as well — the two agree with no configuration.
+//! time. The path is `PLAYGROUND_SNAPSHOT` if set, else a well-known temp file
+//! the GUI defaults to as well — the two agree with no configuration.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ use xmip_test_playground::{CONTRACTS, Schedule, history_toml, to_toml, write_ato
 
 fn main() {
     let node = "xmip:///playground";
-    let file_dir = std::env::temp_dir().join("xmip-playground");
+    let file_dir = std::env::temp_dir().join("playground");
     std::fs::remove_dir_all(&file_dir).ok();
     let mut schedule = Schedule::new(node, &file_dir);
 
@@ -81,16 +81,16 @@ fn main() {
 /// Where the snapshot is written for the GUI to read: the environment override,
 /// or the well-known temp file the GUI defaults to as well.
 fn snapshot_path() -> PathBuf {
-    std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
-        || std::env::temp_dir().join("xmip-playground-snapshot.toml"),
+    std::env::var_os("PLAYGROUND_SNAPSHOT").map_or_else(
+        || std::env::temp_dir().join("playground-snapshot.toml"),
         PathBuf::from,
     )
 }
 
 /// Where the throughput history is written for the CLI and UI to read.
 fn history_path() -> PathBuf {
-    std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
-        || std::env::temp_dir().join("xmip-playground-history.toml"),
+    std::env::var_os("PLAYGROUND_HISTORY").map_or_else(
+        || std::env::temp_dir().join("playground-history.toml"),
         PathBuf::from,
     )
 }
