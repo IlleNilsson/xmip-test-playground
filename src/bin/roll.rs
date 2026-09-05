@@ -11,8 +11,9 @@
 //!
 //! After every tick it writes the snapshot to a TOML file the monitoring GUI
 //! reads, so an operator watches the same matrix in the web or desktop UI over
-//! time. The path is `PLAYGROUND_SNAPSHOT` if set, else a well-known temp file
-//! the GUI defaults to as well — the two agree with no configuration.
+//! time. The path is `XMIP_PLAYGROUND_SNAPSHOT` if set — an environment variable
+//! is external, so it keeps the prefix — else a well-known temp file the GUI
+//! defaults to as well, the two agreeing with no configuration.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -81,7 +82,7 @@ fn main() {
 /// Where the snapshot is written for the GUI to read: the environment override,
 /// or the well-known temp file the GUI defaults to as well.
 fn snapshot_path() -> PathBuf {
-    std::env::var_os("PLAYGROUND_SNAPSHOT").map_or_else(
+    std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
         || std::env::temp_dir().join("playground-snapshot.toml"),
         PathBuf::from,
     )
@@ -89,7 +90,7 @@ fn snapshot_path() -> PathBuf {
 
 /// Where the throughput history is written for the CLI and UI to read.
 fn history_path() -> PathBuf {
-    std::env::var_os("PLAYGROUND_HISTORY").map_or_else(
+    std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
         || std::env::temp_dir().join("playground-history.toml"),
         PathBuf::from,
     )
