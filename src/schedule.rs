@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use xmip_observe::{Health, HealthRecord, Snapshot};
+use xmip_observe::{Count, Counted, Health, HealthRecord, Snapshot};
 
 use crate::pingpong::ping_pong;
 use crate::roundtrip::{
@@ -66,6 +66,11 @@ pub struct Schedule {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
     tallies: BTreeMap<String, Tally>,
+    /// Cumulative throughput since the schedule started, so the snapshot carries
+    /// what the operator's stage cards count: a delivered round is one Stream in
+    /// and one Message out; bytes are what actually moved.
+    delivered: u64,
+    moved_bytes: u64,
 }
 
 impl Schedule {
@@ -86,6 +91,8 @@ impl Schedule {
             node: node.into(),
             transports,
             tallies: BTreeMap::new(),
+            delivered: 0,
+            moved_bytes: 0,
         }
     }
 
@@ -96,13 +103,38 @@ impl Schedule {
         let mut snapshot = Snapshot::new();
 
         for verdict in self.run_once(now) {
+            self.delivered += u64::from(matches!(verdict.outcome, Outcome::Delivered));
+            self.moved_bytes += verdict.bytes;
+
             let scope = verdict.scope(&self.node);
             let tally = self.tallies.entry(scope.clone()).or_default();
             tally.fold(&verdict.outcome);
             snapshot.record_health(over_time(&scope, tally, now));
         }
 
+        self.record_throughput(&mut snapshot, now);
+
         snapshot
+    }
+
+    /// Publish the cumulative throughput at the node scope: Streams in, Messages
+    /// out (one of each per delivered round) and the Bytes that moved. These are
+    /// what the operator's Receive and Send stage cards count.
+    fn record_throughput(&self, snapshot: &mut Snapshot, now: i64) {
+        for (counted, value) in [
+            (Counted::Streams, self.delivered),
+            (Counted::Messages, self.delivered),
+            (Counted::Bytes, self.moved_bytes),
+        ] {
+            snapshot.record_count(Count {
+                scope: self.node.clone(),
+                counted,
+                value,
+                window_start_unix_nanos: now,
+                window_end_unix_nanos: now,
+                observed_unix_nanos: now,
+            });
+        }
     }
 
     /// The verdicts of one round — every wired transport by every contract —

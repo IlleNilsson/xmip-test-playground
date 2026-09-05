@@ -28,12 +28,14 @@
 
 pub mod contracts;
 pub mod pingpong;
+pub mod report;
 pub mod roundtrip;
 pub mod schedule;
 pub mod verdict;
 
 pub use contracts::{ContentContract, Shape};
 pub use pingpong::ping_pong;
+pub use report::{to_json, write_atomic};
 pub use roundtrip::{
     Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
     WebSocketRoundTrip,

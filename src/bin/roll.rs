@@ -8,12 +8,18 @@
 //! Pass a number to run that many rounds and stop (a bounded look); omit it to
 //! roll until interrupted. When stdout is a terminal the board is redrawn in
 //! place; when it is piped, one summary line per round is appended instead.
+//!
+//! After every tick it writes the snapshot to a JSON file the monitoring GUI
+//! reads, so an operator watches the same matrix in the web or desktop UI over
+//! time. The path is `XMIP_PLAYGROUND_SNAPSHOT` if set, else a well-known temp
+//! file the GUI defaults to as well — the two agree with no configuration.
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use xmip_observe::{Health, Snapshot};
-use xmip_test_playground::{CONTRACTS, Schedule};
+use xmip_test_playground::{CONTRACTS, Schedule, to_json, write_atomic};
 
 fn main() {
     let node = "xmip:///playground";
@@ -21,17 +27,30 @@ fn main() {
     std::fs::remove_dir_all(&file_dir).ok();
     let mut schedule = Schedule::new(node, &file_dir);
 
+    let snapshot_path = snapshot_path();
     let limit: Option<u64> = std::env::args().nth(1).and_then(|arg| arg.parse().ok());
     let live = std::io::stdout().is_terminal();
     let interval = Duration::from_millis(1000);
+
+    if !live {
+        println!("publishing snapshots to {}", snapshot_path.display());
+    }
 
     let mut round: u64 = 0;
     loop {
         round += 1;
         let snapshot = schedule.tick();
 
+        if let Err(error) = write_atomic(&snapshot_path, &to_json(node, &snapshot)) {
+            eprintln!(
+                "could not write the snapshot to {}: {error}",
+                snapshot_path.display()
+            );
+        }
+
         if live {
             redraw(node, round, &snapshot);
+            println!("  publishing to {}", snapshot_path.display());
         } else {
             summarise(node, round, &snapshot);
         }
@@ -43,6 +62,15 @@ fn main() {
     }
 
     std::fs::remove_dir_all(&file_dir).ok();
+}
+
+/// Where the snapshot is written for the GUI to read: the environment override,
+/// or the well-known temp file the GUI defaults to as well.
+fn snapshot_path() -> PathBuf {
+    std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
+        || std::env::temp_dir().join("xmip-playground-snapshot.json"),
+        PathBuf::from,
+    )
 }
 
 /// The full board, cleared and reprinted in place — a live terminal view.
