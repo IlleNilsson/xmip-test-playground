@@ -9,14 +9,19 @@ use xmip_observe::{Health, HealthRecord};
 
 /// The content a probe sends and expects back. The matrix's second axis;
 /// ADR-0028 exercises every transport by every contract. It starts with the
-/// contracts that need no module — raw bytes and UTF-8 text — and grows as the
-/// content modules land.
+/// contracts that need no module — raw bytes, UTF-8 text, and an HTML document
+/// as a representation carried over any transport — and grows as the content
+/// modules land. HTML is a representation, not a transport (ADR-0010): it rides
+/// on the contract axis and so is exercised over all six transports at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Contract {
     /// Arbitrary bytes, returned unchanged.
     Bytes,
     /// UTF-8 text, returned unchanged.
     Text,
+    /// An HTML document, returned unchanged. A `xmip-message-html`
+    /// representation once that module lands; a byte round trip until then.
+    Html,
 }
 
 impl Contract {
@@ -26,6 +31,7 @@ impl Contract {
         match self {
             Contract::Bytes => "bytes",
             Contract::Text => "text",
+            Contract::Html => "html",
         }
     }
 
@@ -35,6 +41,7 @@ impl Contract {
         match self {
             Contract::Bytes => vec![0x00, 0x01, 0x02, 0xfd, 0xfe, 0xff],
             Contract::Text => b"xmip ping-pong".to_vec(),
+            Contract::Html => b"<!doctype html><title>xmip</title><p>ping-pong".to_vec(),
         }
     }
 }
