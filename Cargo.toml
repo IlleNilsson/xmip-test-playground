@@ -21,6 +21,13 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+# The transports it ping-pongs over, and the snapshot it publishes verdicts
+# into. observe carries Health; transport carries the Transport trait whose
+# send/receive is the round trip.
+xmip-observe = { package = "xmip-core-observe", git = "https://github.com/IlleNilsson/xmip-core-observe", branch = "main" }
+xmip-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+
 [lints.rust]
 # forbid, not deny: a module has no business writing unsafe. The one exception
 # in the estate is xmip-core-abi, which holds the extern "C" vtable over

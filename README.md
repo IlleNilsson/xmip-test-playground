@@ -1,28 +1,27 @@
 # xmip-test-playground
 
-**The Xmip Playground.** The tool that exercises Xmip — every transport, every
-content contract, all the time.
+**The Xmip Playground.** One integration test — the **pingpong test** — over
+the whole estate, over time.
 
-It spawns Development nodes as processes on one machine and drives the message
-path through them: Receive Locations fed with generated Streams, Send Locations
-watched for what comes out, and a verdict per (transport, contract) pair
-published as health, so the pair that breaks turns red on the same page as
-everything else. No virtualisation: the operating system isolates processes,
-and Development is a node role, not a test harness.
+Its scenario is a round trip: send a payload, catch it, check it came back
+whole. It runs that over every transport by every content contract, on a
+Schedule, and never stops. Each round folds into a running tally per pair, so a
+pair is judged by its record over time — one failure among thousands stays
+visible until a round passes again. Every pair rolls up to one state at
+`xmip:///<node>/exercise`, so an operator sees one green or the one pair that
+broke. ADR-0028.
 
-Xmip's own transports are the counterparty. `xmip-core-transport` carries http,
-smtp, tcp, udp and file as both server and client, so a Receive Location is fed
-by an Xmip Send Location and nothing external is stood up.
-
-It is also where the numbers come from. Streams in, Journeys through, Messages
-out — per stage, per pair — into the snapshot the operator boundary reads.
-Until a Playground runs, a throughput card on the GUI shows a dash.
+Ping-pong is the scenario, not a protocol; the transport is what varies under
+it. Xmip's own transports are both ends, so nothing external is stood up.
 
 ## State
 
-Created 2026-09-05 from the Rust template; ADR-0028 records the decision and
-terminology.md the word. It holds no code yet beyond its own description.
+Created 2026-09-05. The file transport runs today — self-contained, no port to
+coordinate — over the bytes and text contracts, with the tally and the health
+roll-up in place. The socket transports (tcp, udp, http, smtp) join as the
+scenario learns each one's bind-and-accept; a transport that supports only one
+direction is reported yellow, exercised as far as its one side allows, per
+ADR-0028 clause 5.
 
-The runtime performs startup phases 1–3 today — read, build, validate — and
-nothing after. The first Playground therefore spawns nodes that plan and
-validate, and grows with the runtime as phases 4–9 land.
+`Schedule::tick()` runs one round and returns the snapshot to publish; the
+running thread belongs to whatever hosts it.
