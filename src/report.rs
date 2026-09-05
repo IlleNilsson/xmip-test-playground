@@ -16,7 +16,7 @@ use std::io;
 use std::path::Path;
 
 use serde::Serialize;
-use xmip_observe::{Counted, Health, History, Snapshot};
+use xmip_observe::{Activity, Counted, Health, History, ItemKind, Snapshot};
 
 #[derive(Serialize)]
 struct SnapshotReport {
@@ -45,6 +45,22 @@ struct CountReport {
 struct HistoryReport {
     node: String,
     points: Vec<PointReport>,
+}
+
+#[derive(Serialize)]
+struct ActivityReport {
+    node: String,
+    items: Vec<ItemReport>,
+}
+
+#[derive(Serialize)]
+struct ItemReport {
+    kind: String,
+    scope: String,
+    id: String,
+    bytes: u64,
+    detail: String,
+    observed_unix_nanos: i64,
 }
 
 #[derive(Serialize)]
@@ -119,6 +135,31 @@ pub fn history_toml(node: &str, history: &History) -> String {
     toml::to_string(&report).unwrap_or_default()
 }
 
+/// The recent individual items beneath `node` as the TOML the item view reads:
+/// the Streams, Messages and Journeys of the last rounds, newest first. ADR-0032.
+#[must_use]
+pub fn activity_toml(node: &str, activity: &Activity) -> String {
+    let items = activity
+        .recent(node, None, 400)
+        .into_iter()
+        .map(|item| ItemReport {
+            kind: kind_name(item.kind).to_string(),
+            scope: item.scope,
+            id: item.id,
+            bytes: item.bytes,
+            detail: item.detail,
+            observed_unix_nanos: item.observed_unix_nanos,
+        })
+        .collect();
+
+    let report = ActivityReport {
+        node: node.to_string(),
+        items,
+    };
+
+    toml::to_string(&report).unwrap_or_default()
+}
+
 /// Write `contents` to `path` atomically: a sibling temp file, then a rename
 /// over the target. A reader either sees the previous file or this one, never a
 /// torn write.
@@ -142,6 +183,14 @@ const fn state(health: Health) -> &'static str {
         Health::Green => "green",
         Health::Yellow => "yellow",
         Health::Red => "red",
+    }
+}
+
+const fn kind_name(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Stream => "stream",
+        ItemKind::Message => "message",
+        ItemKind::Journey => "journey",
     }
 }
 

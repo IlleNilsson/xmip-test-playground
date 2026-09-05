@@ -37,7 +37,7 @@ pub mod verdict;
 pub use contracts::{ContentContract, Shape};
 pub use fault::{Fault, FaultKind, FaultPlan};
 pub use pingpong::ping_pong;
-pub use report::{history_toml, to_toml, write_atomic};
+pub use report::{activity_toml, history_toml, to_toml, write_atomic};
 pub use roundtrip::{
     Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
     WebSocketRoundTrip,

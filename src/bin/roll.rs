@@ -20,7 +20,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use xmip_observe::{Health, History, Snapshot};
-use xmip_test_playground::{FaultPlan, Schedule, history_toml, to_toml, write_atomic};
+use xmip_test_playground::{
+    FaultPlan, Schedule, activity_toml, history_toml, to_toml, write_atomic,
+};
 
 fn main() {
     let node = "xmip:///playground";
@@ -38,6 +40,7 @@ fn main() {
 
     let snapshot_path = snapshot_path();
     let history_path = history_path();
+    let activity_path = activity_path();
     let limit: Option<u64> = std::env::args().nth(1).and_then(|arg| arg.parse().ok());
     let live = std::io::stdout().is_terminal();
     let interval = Duration::from_millis(1000);
@@ -64,6 +67,14 @@ fn main() {
             eprintln!(
                 "could not write the history to {}: {error}",
                 history_path.display()
+            );
+        }
+
+        if let Err(error) = write_atomic(&activity_path, &activity_toml(node, schedule.activity()))
+        {
+            eprintln!(
+                "could not write the activity to {}: {error}",
+                activity_path.display()
             );
         }
 
@@ -96,6 +107,14 @@ fn snapshot_path() -> PathBuf {
 fn history_path() -> PathBuf {
     std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
         || std::env::temp_dir().join("playground-history.toml"),
+        PathBuf::from,
+    )
+}
+
+/// Where the recent individual items are written for the item view to read.
+fn activity_path() -> PathBuf {
+    std::env::var_os("XMIP_PLAYGROUND_ACTIVITY").map_or_else(
+        || std::env::temp_dir().join("playground-activity.toml"),
         PathBuf::from,
     )
 }

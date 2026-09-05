@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use xmip_observe::{Count, Counted, Health, HealthRecord, Snapshot};
+use xmip_observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
 
 use crate::fault::FaultPlan;
 use crate::pingpong::ping_pong;
@@ -65,6 +65,8 @@ pub struct Schedule {
     faults: FaultPlan,
     round: u64,
     tallies: BTreeMap<String, Tally>,
+    activity: Activity,
+    item_seq: u64,
     streams: u64,
     messages: u64,
     journeys: u64,
@@ -92,6 +94,8 @@ impl Schedule {
             faults: FaultPlan::none(),
             round: 0,
             tallies: BTreeMap::new(),
+            activity: Activity::with_capacity(2048),
+            item_seq: 0,
             streams: 0,
             messages: 0,
             journeys: 0,
@@ -130,11 +134,28 @@ impl Schedule {
             let tally = self.tallies.entry(scope.clone()).or_default();
             tally.fold(&verdict.outcome);
             snapshot.record_health(over_time(&scope, tally, now));
+
+            self.item_seq += 1;
+            self.activity.record(Item {
+                kind: item_kind(verdict.stage),
+                scope,
+                id: format!("{:08}", self.item_seq),
+                bytes: verdict.bytes,
+                detail: detail(&verdict.outcome),
+                observed_unix_nanos: now,
+            });
         }
 
         self.record_throughput(&mut snapshot, now);
 
         snapshot
+    }
+
+    /// The recent individual items — the Streams, Messages and Journeys of the
+    /// last rounds — for the surface that lists what actually flowed. ADR-0032.
+    #[must_use]
+    pub fn activity(&self) -> &Activity {
+        &self.activity
     }
 
     /// Publish the cumulative throughput at the node scope: Streams in at
@@ -196,6 +217,24 @@ impl Schedule {
     #[must_use]
     pub fn tally(&self, scope: &str) -> Option<&Tally> {
         self.tallies.get(scope)
+    }
+}
+
+/// Which kind of item a stage produces: Receive a Stream in, Process a Journey
+/// through, Send a Message out.
+const fn item_kind(stage: Stage) -> ItemKind {
+    match stage {
+        Stage::Receive => ItemKind::Stream,
+        Stage::Process => ItemKind::Journey,
+        Stage::Send => ItemKind::Message,
+    }
+}
+
+/// The item's detail line: what became of it.
+fn detail(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::Delivered => "delivered".to_string(),
+        Outcome::OneSided(why) | Outcome::Failed(why) => why.clone(),
     }
 }
 
