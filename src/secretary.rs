@@ -19,11 +19,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore};
-use observe::{Health, HealthRecord, Snapshot};
+use observe::{HealthRecord, Snapshot};
 use retain::{RetentionAction, RetentionPolicy};
 
 use crate::fault::fires_keyed;
 use crate::schedule::{CONTRACTS, now_unix_nanos};
+use crate::standing::{Mark, Standing};
 use crate::verdict::Contract;
 
 /// How long an item is kept before it is archived, and how long it is archived
@@ -88,15 +89,6 @@ struct Item {
     id: u64,
 }
 
-/// One (stage, class) record over time.
-#[derive(Clone, Debug, Default)]
-struct Tally {
-    rounds: u64,
-    failures: u64,
-    last_ok: bool,
-    last_line: String,
-}
-
 /// A stage of the retention lifecycle.
 #[derive(Clone, Copy)]
 enum Sweep {
@@ -127,7 +119,7 @@ pub struct Secretary {
     round: u64,
     next_id: u64,
     under_pressure: bool,
-    tallies: BTreeMap<String, Tally>,
+    standings: BTreeMap<String, Standing>,
 }
 
 impl Secretary {
@@ -143,7 +135,7 @@ impl Secretary {
             round: 0,
             next_id: 0,
             under_pressure: false,
-            tallies: BTreeMap::new(),
+            standings: BTreeMap::new(),
         }
     }
 
@@ -288,15 +280,10 @@ impl Secretary {
             Sweep::Purge => (leaks.purge.contains(name), purge_line(contract, leaks)),
         };
 
-        let tally = self.tallies.entry(scope.to_string()).or_default();
-        tally.rounds += 1;
-        tally.last_ok = !leaked;
-        tally.last_line = line;
-        if leaked {
-            tally.failures += 1;
-        }
-
-        health(scope, tally, now)
+        let mark = if leaked { Mark::Fail } else { Mark::Pass };
+        let standing = self.standings.entry(scope.to_string()).or_default();
+        standing.record(mark, line);
+        standing.health(scope, now)
     }
 
     fn count_live(&self, contract: Contract) -> usize {
@@ -343,27 +330,10 @@ struct Leaks {
     purge: std::collections::BTreeSet<&'static str>,
 }
 
-fn health(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
-    let (health, severity) = if tally.last_ok && tally.failures == 0 {
-        (Health::Green, 0)
-    } else if tally.last_ok {
-        (Health::Yellow, 45)
-    } else {
-        (Health::Red, 90)
-    };
-
-    HealthRecord {
-        scope: scope.to_string(),
-        health,
-        severity,
-        evidence: tally.last_line.clone(),
-        observed_unix_nanos: now,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use observe::Health;
 
     #[test]
     fn a_methodical_run_keeps_archives_and_purges_without_a_leak() {

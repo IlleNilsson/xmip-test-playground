@@ -17,13 +17,14 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use observe::{Count, Counted, Health, HealthRecord, Snapshot};
+use observe::{Count, Counted, Snapshot};
 use stream::Stream;
 use xcore::StreamId;
 
 use crate::fault::fires_keyed;
 use crate::roundtrip::{Exchange, RoundTrip, all_transports};
 use crate::schedule::{CONTRACTS, now_unix_nanos};
+use crate::standing::{Mark, Standing};
 use crate::verdict::Contract;
 
 /// The default size of one load, in bytes. A megabyte: large enough that a UDP
@@ -39,15 +40,6 @@ const TARGET_BYTES: usize = 1024 * 1024;
 /// it arrived whole — checked without a parse.
 const VALIDATE_CEILING: usize = 16 * 1024 * 1024;
 
-/// One pair's record over time.
-#[derive(Clone, Debug, Default)]
-struct Tally {
-    rounds: u64,
-    failures: u64,
-    last_delivered: bool,
-    last_line: String,
-}
-
 /// A scheduled size exercise: every transport by every contract, a payload each
 /// round (a megabyte by default, up to gigabytes), judged on whether it survived
 /// whole and how fast it moved.
@@ -57,7 +49,7 @@ pub struct Load {
     bytes: usize,
     under_pressure: bool,
     round: u64,
-    tallies: BTreeMap<String, Tally>,
+    standings: BTreeMap<String, Standing>,
     moved_bytes: u64,
 }
 
@@ -73,7 +65,7 @@ impl Load {
             bytes: TARGET_BYTES,
             under_pressure: false,
             round: 0,
-            tallies: BTreeMap::new(),
+            standings: BTreeMap::new(),
             moved_bytes: 0,
         }
     }
@@ -108,18 +100,19 @@ impl Load {
                 let scope = format!("{}/{}/{}", self.node, name, contract.name());
                 let line = self.carry(transport.as_ref(), contract);
 
-                let tally = self.tallies.entry(scope.clone()).or_default();
-                tally.rounds += 1;
-                tally.last_delivered = line.delivered;
-                tally.last_line.clone_from(&line.evidence);
-                if !line.delivered && !line.one_sided {
-                    tally.failures += 1;
-                }
+                let mark = if line.delivered {
+                    Mark::Pass
+                } else if line.one_sided {
+                    Mark::Warn
+                } else {
+                    Mark::Fail
+                };
                 if line.delivered {
                     self.moved_bytes += line.bytes;
                 }
-
-                snapshot.record_health(health(&scope, tally, now));
+                let standing = self.standings.entry(scope.clone()).or_default();
+                standing.record(mark, line.evidence);
+                snapshot.record_health(standing.health(&scope, now));
             }
         }
 
@@ -235,26 +228,6 @@ impl Line {
     }
 }
 
-fn health(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
-    let (health, severity) = if tally.last_delivered && tally.failures == 0 {
-        (Health::Green, 0)
-    } else if tally.last_delivered {
-        (Health::Yellow, 45)
-    } else if tally.last_line.contains("only") || tally.last_line.contains("side") {
-        (Health::Yellow, 40)
-    } else {
-        (Health::Red, 90)
-    };
-
-    HealthRecord {
-        scope: scope.to_string(),
-        health,
-        severity,
-        evidence: tally.last_line.clone(),
-        observed_unix_nanos: now,
-    }
-}
-
 /// A byte count for display, scaled to B, KB, MB or GB — so a gigabyte load
 /// reads as "1.0 GB", not a seven-digit byte count.
 fn human(bytes: f64) -> String {
@@ -341,6 +314,7 @@ pub fn as_stream(contract: Contract, bytes: Vec<u8>) -> Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use observe::Health;
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("xmip-load-{name}"));

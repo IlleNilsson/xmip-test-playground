@@ -51,6 +51,7 @@ pub mod report;
 pub mod roundtrip;
 pub mod schedule;
 pub mod secretary;
+pub mod standing;
 pub mod verdict;
 
 pub use claim::Claim;

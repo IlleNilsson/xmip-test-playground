@@ -27,10 +27,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use observe::{Health, HealthRecord, Snapshot};
+use observe::{HealthRecord, Snapshot};
 
 use crate::fault::fires_keyed;
 use crate::schedule::now_unix_nanos;
+use crate::standing::{Mark, Standing};
 
 /// Competing reader threads per round.
 const READERS: usize = 4;
@@ -88,15 +89,6 @@ enum Verdict {
     Missed(String),
 }
 
-/// One (transport, style) record over time.
-#[derive(Clone, Debug, Default)]
-struct Tally {
-    rounds: u64,
-    failures: u64,
-    last_ok: bool,
-    last_line: String,
-}
-
 /// The claim exercise: each round drops keyed items into a directory and races
 /// reader threads for them, one style at a time.
 pub struct Claim {
@@ -104,7 +96,7 @@ pub struct Claim {
     dir: PathBuf,
     round: u64,
     under_pressure: bool,
-    tallies: BTreeMap<String, Tally>,
+    standings: BTreeMap<String, Standing>,
 }
 
 impl Claim {
@@ -117,7 +109,7 @@ impl Claim {
             dir: dir.into(),
             round: 0,
             under_pressure: false,
-            tallies: BTreeMap::new(),
+            standings: BTreeMap::new(),
         }
     }
 
@@ -192,15 +184,10 @@ impl Claim {
             Verdict::Contended(line) | Verdict::Missed(line) => (false, line),
         };
 
-        let tally = self.tallies.entry(scope.clone()).or_default();
-        tally.rounds += 1;
-        tally.last_ok = ok;
-        tally.last_line = line;
-        if !ok {
-            tally.failures += 1;
-        }
-
-        health(&scope, tally, now)
+        let mark = if ok { Mark::Pass } else { Mark::Fail };
+        let standing = self.standings.entry(scope.clone()).or_default();
+        standing.record(mark, line);
+        standing.health(&scope, now)
     }
 }
 
@@ -376,27 +363,10 @@ fn ordered_per_key(processed: &[Processed]) -> bool {
     true
 }
 
-fn health(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
-    let (health, severity) = if tally.last_ok && tally.failures == 0 {
-        (Health::Green, 0)
-    } else if tally.last_ok {
-        (Health::Yellow, 45)
-    } else {
-        (Health::Red, 90)
-    };
-
-    HealthRecord {
-        scope: scope.to_string(),
-        health,
-        severity,
-        evidence: tally.last_line.clone(),
-        observed_unix_nanos: now,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use observe::Health;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("xmip-claim-{name}"));
