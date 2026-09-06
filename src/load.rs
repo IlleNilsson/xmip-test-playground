@@ -1,13 +1,15 @@
 //! The load scenario: a large payload round-trips whole, and the contract
 //! still holds at size.
 //!
-//! ADR-0028. Pingpong sends a handful of bytes; load sends a megabyte and
-//! asks whether it comes back byte-for-byte and still validates. **Green** when
-//! it does, with the throughput; **red** when it is truncated, corrupted, or the
+//! ADR-0028. Pingpong sends a handful of bytes; load sends a large payload — a
+//! megabyte by default, gigabytes on demand ([`Load::with_bytes`]) — and asks
+//! whether it comes back byte-for-byte and still validates. **Green** when it
+//! does, with the throughput; **red** when it is truncated, corrupted, or the
 //! transport cannot carry it — a UDP datagram cannot hold a megabyte, and that
 //! real ceiling shows as red without any injection. Under pressure the scenario
 //! also drops a transfer mid-flight now and then, deterministically. `file` is
-//! left clean.
+//! left clean. At size a byte pattern is sent and integrity is checked without
+//! parsing; below the ceiling a valid document is sent and the contract is run.
 //!
 //! Judged over time like the rest: a pair that carried the load last round but
 //! dropped it before reads yellow, not green.
@@ -27,10 +29,18 @@ use crate::roundtrip::{
 use crate::schedule::{CONTRACTS, now_unix_nanos};
 use crate::verdict::Contract;
 
-/// The size of one heavy load, in bytes. A megabyte: large enough that a UDP
+/// The default size of one load, in bytes. A megabyte: large enough that a UDP
 /// datagram cannot carry it and a real transfer is measurable, small enough that
-/// a loopback round trip stays quick.
+/// a loopback round trip stays quick. The runner raises it — gigabytes, on a box
+/// with the memory for it — with [`Load::with_bytes`].
 const TARGET_BYTES: usize = 1024 * 1024;
+
+/// Above this size the structural contract is not parsed. Proving a JSON or XML
+/// contract *holds at size* is worth doing at a few megabytes; parsing a
+/// multi-gigabyte document allocates a second copy the size of the payload and
+/// proves nothing more. Above the ceiling the claim is byte integrity at scale —
+/// it arrived whole — checked without a parse.
+const VALIDATE_CEILING: usize = 16 * 1024 * 1024;
 
 /// One pair's record over time.
 #[derive(Clone, Debug, Default)]
@@ -41,11 +51,13 @@ struct Tally {
     last_line: String,
 }
 
-/// A scheduled size exercise: every transport by every contract, a megabyte each
-/// round, judged on whether it survived whole and how fast it moved.
+/// A scheduled size exercise: every transport by every contract, a payload each
+/// round (a megabyte by default, up to gigabytes), judged on whether it survived
+/// whole and how fast it moved.
 pub struct Load {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
+    bytes: usize,
     under_pressure: bool,
     round: u64,
     tallies: BTreeMap<String, Tally>,
@@ -68,6 +80,7 @@ impl Load {
         Self {
             node: node.into(),
             transports,
+            bytes: TARGET_BYTES,
             under_pressure: false,
             round: 0,
             tallies: BTreeMap::new(),
@@ -79,6 +92,17 @@ impl Load {
     #[must_use]
     pub fn under_pressure(mut self) -> Self {
         self.under_pressure = true;
+        self
+    }
+
+    /// The same exercise at a chosen payload size — the knob that reaches
+    /// gigabytes. Peak memory is roughly twice this per pair (the payload and the
+    /// copy that comes back), and pairs run one at a time, so the machine needs
+    /// about that much free. Above [`VALIDATE_CEILING`] integrity is checked
+    /// without parsing the structural contract.
+    #[must_use]
+    pub fn with_bytes(mut self, bytes: usize) -> Self {
+        self.bytes = bytes.max(1);
         self
     }
 
@@ -121,12 +145,20 @@ impl Load {
         snapshot
     }
 
-    /// Carry one large payload over one transport, and judge it.
+    /// Carry one load over one transport, and judge it.
     #[allow(clippy::cast_precision_loss)] // display throughput, not arithmetic that must be exact
     fn carry(&self, transport: &dyn RoundTrip, contract: Contract) -> Line {
         let name = transport.transport();
-        let payload = large_payload(contract, TARGET_BYTES);
-        let size = payload.len();
+        let size = self.bytes;
+        let structural = size <= VALIDATE_CEILING;
+        // Below the ceiling: a valid document of the contract's shape, so the
+        // contract can be run at size. Above it: a byte pattern, since parsing a
+        // gigabyte proves nothing the byte check does not.
+        let payload = if structural {
+            large_payload(contract, size)
+        } else {
+            filler(size)
+        };
 
         let started = Instant::now();
         let exchange = transport.exchange(&payload);
@@ -137,22 +169,25 @@ impl Load {
                 if self.dropped(name, contract) {
                     return Line::failed(format!(
                         "connection dropped at {} of {}",
-                        megabytes(size / 2),
-                        megabytes(size)
+                        human((size / 2) as f64),
+                        human(size as f64)
                     ));
                 }
-                // It came back whole; the contract must still hold at size.
-                if let Err(why) = contract.validate(&as_stream(contract, back)) {
+                // It came back whole. Below the ceiling the contract must still
+                // hold at size; above it the byte check is the whole claim.
+                if structural && let Err(why) = contract.validate(&as_stream(contract, back)) {
                     return Line::failed(format!("contract not held at size: {why}"));
                 }
                 let secs = elapsed.as_secs_f64().max(0.000_001);
-                let rate = (size as f64 / secs) / (1024.0 * 1024.0);
+                let rate = size as f64 / secs;
+                let note = if structural { "" } else { " (integrity only)" };
                 Line::delivered(
                     size as u64,
                     format!(
-                        "{} in {:.1}ms ({rate:.0} MB/s)",
-                        megabytes(size),
-                        elapsed.as_secs_f64() * 1000.0
+                        "{} in {:.1}ms ({}/s){note}",
+                        human(size as f64),
+                        elapsed.as_secs_f64() * 1000.0,
+                        human(rate)
                     ),
                 )
             }
@@ -230,9 +265,29 @@ fn health(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
     }
 }
 
-#[allow(clippy::cast_precision_loss)] // a size for display
-fn megabytes(bytes: usize) -> String {
-    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+/// A byte count for display, scaled to B, KB, MB or GB — so a gigabyte load
+/// reads as "1.0 GB", not a seven-digit byte count.
+fn human(bytes: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes / GB)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes / MB)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes / KB)
+    } else {
+        format!("{bytes:.0} B")
+    }
+}
+
+/// A plain byte pattern of `size` bytes, for loads too large to bother giving a
+/// structural shape. Cheap to build and to check.
+fn filler(size: usize) -> Vec<u8> {
+    (0..size)
+        .map(|i| u8::try_from(i % 256).unwrap_or(0))
+        .collect()
 }
 
 /// A large, valid payload of `contract`'s shape, at least `target` bytes. Each
@@ -330,6 +385,39 @@ mod tests {
             snapshot.worst("xmip:///playground/load/udp"),
             Some(Health::Green),
             "a datagram cannot hold a megabyte"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn human_scales_from_bytes_to_gigabytes() {
+        assert_eq!(human(512.0), "512 B");
+        assert_eq!(human(1024.0 * 1024.0), "1.0 MB");
+        assert_eq!(human(2.0 * 1024.0 * 1024.0 * 1024.0), "2.0 GB");
+    }
+
+    #[test]
+    fn filler_is_the_requested_size() {
+        assert_eq!(filler(4096).len(), 4096);
+    }
+
+    #[test]
+    fn above_the_ceiling_the_parse_is_skipped_but_integrity_holds() {
+        let dir = scratch("ceiling");
+        // Just over the ceiling: a byte pattern, checked whole, no structural
+        // parse. Over file only would be ideal, but a tick runs all transports;
+        // the size is kept just past the ceiling so the test stays quick.
+        let mut hl = Load::new("xmip:///playground/load", &dir).with_bytes(VALIDATE_CEILING + 1);
+        let snapshot = hl.tick();
+        let file = snapshot
+            .health("xmip:///playground/load/file")
+            .into_iter()
+            .next()
+            .expect("a file record");
+        assert_eq!(file.health, Health::Green);
+        assert!(
+            file.evidence.contains("integrity only"),
+            "no parse above the ceiling"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

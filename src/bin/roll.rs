@@ -42,7 +42,9 @@ fn main() {
         .with_faults(FaultPlan::realistic());
     let mut furious =
         Furious::new(format!("{root}/furious"), base.join("furious")).under_pressure();
-    let mut load = Load::new(format!("{root}/load"), base.join("load")).under_pressure();
+    let mut load = Load::new(format!("{root}/load"), base.join("load"))
+        .under_pressure()
+        .with_bytes(load_bytes());
     let mut secretary = Secretary::new(format!("{root}/secretary")).under_pressure();
 
     // An hour of history at one point a second: enough to watch a shift, bounded
@@ -111,6 +113,30 @@ fn merge(into: &mut Snapshot, from: &Snapshot) {
 /// defaults to as well. The variable is external, so it keeps the prefix.
 fn env_path(variable: &str, default: &str) -> PathBuf {
     std::env::var_os(variable).map_or_else(|| std::env::temp_dir().join(default), PathBuf::from)
+}
+
+/// The load payload size: `XMIP_PLAYGROUND_LOAD_BYTES` if set — a plain number or
+/// a human size like `512mb` or `2gb` — else a megabyte. The variable is
+/// external, so it keeps the prefix. Note the memory: peak is roughly twice this
+/// per pair, so a gigabyte wants a few free.
+fn load_bytes() -> usize {
+    let Some(raw) = std::env::var("XMIP_PLAYGROUND_LOAD_BYTES").ok() else {
+        return 1024 * 1024;
+    };
+    let text = raw.trim().to_lowercase();
+    let (number, unit) = text
+        .find(|c: char| c.is_alphabetic())
+        .map_or((text.as_str(), ""), |at| text.split_at(at));
+    let scale: usize = match unit {
+        "gb" | "g" => 1024 * 1024 * 1024,
+        "mb" | "m" => 1024 * 1024,
+        "kb" | "k" => 1024,
+        _ => 1,
+    };
+    number
+        .trim()
+        .parse::<usize>()
+        .map_or(1024 * 1024, |value| value.saturating_mul(scale))
 }
 
 fn write(path: &Path, contents: &str, what: &str) {
