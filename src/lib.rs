@@ -28,6 +28,7 @@
 
 pub mod contracts;
 pub mod fault;
+pub mod identity;
 pub mod pingpong;
 pub mod report;
 pub mod roundtrip;
@@ -36,6 +37,7 @@ pub mod verdict;
 
 pub use contracts::{ContentContract, Shape};
 pub use fault::{Fault, FaultKind, FaultPlan};
+pub use identity::{IdentityFaults, Step};
 pub use pingpong::ping_pong;
 pub use report::{activity_toml, history_toml, to_toml, write_atomic};
 pub use roundtrip::{

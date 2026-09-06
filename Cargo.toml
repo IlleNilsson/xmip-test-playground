@@ -36,6 +36,16 @@ stream = { package = "xmip-core-stream", git = "https://github.com/IlleNilsson/x
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
 contract = { package = "xmip-core-contract", git = "https://github.com/IlleNilsson/xmip-core-contract", branch = "main" }
 
+# The identity axis: a Receive Location identifies, authenticates and authorizes;
+# a Send Location presents identity (ADR-0019, ADR-0033). The playground drives
+# the estate's real gates with stand-in implementors, so a fault is a real
+# Refusal or Decision::Denied, not a fabricated string. context carries the
+# AuthenticatedIdentity and IdentityFacts the gates pass between them.
+identify = { package = "xmip-core-identify", git = "https://github.com/IlleNilsson/xmip-core-identify", branch = "main" }
+authenticate = { package = "xmip-core-authenticate", git = "https://github.com/IlleNilsson/xmip-core-authenticate", branch = "main" }
+authorize = { package = "xmip-core-authorize", git = "https://github.com/IlleNilsson/xmip-core-authorize", branch = "main" }
+context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson/xmip-core-context", branch = "main" }
+
 # The one real parser the content contracts lean on. JSON well-formedness is a
 # genuine check, not a byte comparison, which is the point of exercising a
 # contract rather than a transport — JSON as content, which is exactly the case

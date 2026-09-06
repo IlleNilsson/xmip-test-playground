@@ -4,10 +4,10 @@
 //! over time** across the message path — Receive, Process, Send. A Schedule
 //! ticks; each tick runs one round over every transport, for every contract, and
 //! expands it into a verdict per stage. Loopback itself never fails, so the
-//! Schedule injects the faults a real integration suffers — transport,
-//! addressing, authentication and contract, on all three stages — from a
-//! [`FaultPlan`]. What it publishes is not the last round but the record over
-//! time: how many rounds passed, and whether the pair is failing now.
+//! Schedule injects transport and content faults — transport, addressing and
+//! contract — on all three stages from a [`FaultPlan`], while the identity
+//! pipeline faults its own steps. What it publishes is not the last round but
+//! the record over time: how many rounds passed, and whether the pair fails now.
 //!
 //! The running thread is the caller's — the crate gives the tick, so a test
 //! drives many rounds without waiting on a clock.
@@ -18,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
 
 use crate::fault::FaultPlan;
+use crate::identity::{self, IdentityFaults};
 use crate::pingpong::ping_pong;
 use crate::roundtrip::{
     FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
@@ -63,6 +64,7 @@ pub struct Schedule {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
     faults: FaultPlan,
+    identity_faults: IdentityFaults,
     round: u64,
     tallies: BTreeMap<String, Tally>,
     activity: Activity,
@@ -92,6 +94,7 @@ impl Schedule {
             node: node.into(),
             transports,
             faults: FaultPlan::none(),
+            identity_faults: IdentityFaults::none(),
             round: 0,
             tallies: BTreeMap::new(),
             activity: Activity::with_capacity(2048),
@@ -107,6 +110,15 @@ impl Schedule {
     /// [`FaultPlan::realistic`]; the tests use the fault-free default.
     #[must_use]
     pub fn with_faults(mut self, faults: FaultPlan) -> Self {
+        // One switch turns on both: an empty plan runs the identity pipeline
+        // clean, a realistic plan faults it too, so the runner's single
+        // `with_faults(FaultPlan::realistic())` gets transport and identity
+        // faults together.
+        self.identity_faults = if faults.is_empty() {
+            IdentityFaults::none()
+        } else {
+            IdentityFaults::realistic()
+        };
         self.faults = faults;
         self
     }
@@ -119,7 +131,13 @@ impl Schedule {
         let mut snapshot = Snapshot::new();
 
         for verdict in self.run_once(now) {
-            if matches!(verdict.outcome, Outcome::Delivered) {
+            // Throughput and the activity feed count the transport verdict, not
+            // the identity children: a Stream is received once, not once per
+            // identity step. The identity points still fold into health, so an
+            // operator drills to the step that failed.
+            let is_transport = verdict.point.is_none();
+
+            if is_transport && matches!(verdict.outcome, Outcome::Delivered) {
                 match verdict.stage {
                     Stage::Receive => self.streams += 1,
                     Stage::Process => self.journeys += 1,
@@ -135,15 +153,17 @@ impl Schedule {
             tally.fold(&verdict.outcome);
             snapshot.record_health(over_time(&scope, tally, now));
 
-            self.item_seq += 1;
-            self.activity.record(Item {
-                kind: item_kind(verdict.stage),
-                scope,
-                id: format!("{:08}", self.item_seq),
-                bytes: verdict.bytes,
-                detail: detail(&verdict.outcome),
-                observed_unix_nanos: now,
-            });
+            if is_transport {
+                self.item_seq += 1;
+                self.activity.record(Item {
+                    kind: item_kind(verdict.stage),
+                    scope,
+                    id: format!("{:08}", self.item_seq),
+                    bytes: verdict.bytes,
+                    detail: detail(&verdict.outcome),
+                    observed_unix_nanos: now,
+                });
+            }
         }
 
         self.record_throughput(&mut snapshot, now);
@@ -203,13 +223,44 @@ impl Schedule {
                         contract,
                         outcome,
                         bytes: stage_bytes,
+                        point: None,
                         observed_unix_nanos: now,
                     });
                 }
+
+                self.push_identity(&mut verdicts, name, contract, now);
             }
         }
 
         verdicts
+    }
+
+    /// Append the identity verdicts for one (transport, contract): the three
+    /// Receive steps — Identification, Authentication, Authorization — and the
+    /// Send presentation, each a child scope under its stage. ADR-0019, ADR-0033.
+    fn push_identity(&self, verdicts: &mut Vec<Verdict>, name: &str, contract: Contract, now: i64) {
+        for (step, outcome) in identity::receive(&self.identity_faults, name, contract, self.round)
+        {
+            verdicts.push(Verdict {
+                stage: Stage::Receive,
+                transport: name.to_string(),
+                contract,
+                outcome,
+                bytes: 0,
+                point: Some(step.name()),
+                observed_unix_nanos: now,
+            });
+        }
+
+        verdicts.push(Verdict {
+            stage: Stage::Send,
+            transport: name.to_string(),
+            contract,
+            outcome: identity::send(&self.identity_faults, name, contract, self.round),
+            bytes: 0,
+            point: Some("identity"),
+            observed_unix_nanos: now,
+        });
     }
 
     /// The tally for one pair's scope, for a caller that wants the numbers
@@ -347,13 +398,16 @@ mod tests {
 
         let snapshot = schedule.tick();
 
-        // file carries no fault, so every stage of every file pair is green.
-        for stage in ["receive", "process", "send"] {
+        // file carries no fault — transport or identity — so every record under
+        // every stage of every file pair is green. Receive now carries the
+        // transport verdict plus three identity steps per contract; Send carries
+        // the transport verdict plus the identity presentation.
+        for (stage, per_contract) in [("receive", 4), ("process", 1), ("send", 2)] {
             let records = snapshot.health(&format!("xmip:///playground/{stage}/file"));
             assert_eq!(
                 records.len(),
-                CONTRACTS.len(),
-                "one per contract at {stage}"
+                CONTRACTS.len() * per_contract,
+                "{per_contract} record(s) per contract at {stage}"
             );
             assert!(records.iter().all(|r| r.health == Health::Green));
         }

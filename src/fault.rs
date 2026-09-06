@@ -4,13 +4,17 @@
 //! transports work and proves nothing about the monitoring — an operator never
 //! sees a red, never drills to it, never watches it recover. So the Playground
 //! injects faults across the message path — **Receive, Process and Send** — of
-//! the four kinds real integrations actually suffer: **transport** errors (a
-//! reset, a timeout, a port in use, a lost datagram), **addressing** errors (an
-//! unresolved host, no route, a rejected recipient), **authentication** errors
-//! (a rejected certificate, denied credentials, a Let's Encrypt cert expired or
-//! its ACME challenge failed) and **contract** errors (content that fails its
-//! schema). A rule fires for a fraction of rounds, so a pair flickers — yellow
-//! when it has failed before and passes now, red the round it fails.
+//! the kinds real integrations actually suffer: **transport** errors (a reset, a
+//! timeout, a port in use, a lost datagram), **addressing** errors (an
+//! unresolved host, no route, a rejected recipient) and **contract** errors
+//! (content that fails its schema). A rule fires for a fraction of rounds, so a
+//! pair flickers — yellow when it has failed before and passes now, red the
+//! round it fails.
+//!
+//! Identity faults — a rejected certificate, an expired Let's Encrypt cert, a
+//! party not permitted — are not here. They belong to the identity pipeline
+//! (`identity.rs`), which faults its own Identification, Authentication and
+//! Authorization steps on Receive and its presentation on Send (ADR-0019).
 //!
 //! Firing is deterministic per (stage, pair, round), not random: the same round
 //! faults the same way, so a test can assert it and a run reproduces, while
@@ -18,16 +22,16 @@
 
 use crate::verdict::{Contract, Stage};
 
-/// The kind of fault, the four an operator triages by.
+/// The kind of transport-and-content fault an operator triages by. Identity
+/// faults are not here: they belong to the identity pipeline (`identity.rs`),
+/// which surfaces Identification, Authentication and Authorization as their own
+/// steps on Receive and Send (ADR-0019, ADR-0033).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaultKind {
     /// The connection itself: reset, timeout, refused, port in use, lost.
     Transport,
     /// Where it was going: an unresolved host, no route, a bad target.
     Addressing,
-    /// Who is calling: a rejected certificate, denied credentials, an expired
-    /// token.
-    Authentication,
     /// The content: it did not hold its contract.
     Contract,
 }
@@ -39,7 +43,6 @@ impl FaultKind {
         match self {
             FaultKind::Transport => "transport",
             FaultKind::Addressing => "addressing",
-            FaultKind::Authentication => "authentication",
             FaultKind::Contract => "contract",
         }
     }
@@ -103,6 +106,14 @@ impl FaultPlan {
         Self { rules: Vec::new() }
     }
 
+    /// Whether this plan injects nothing. The Schedule reads it to decide whether
+    /// to run the identity pipeline clean or with faults, so one `with_faults`
+    /// call turns on both transport and identity faults together.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
     /// A realistic spread of transport, addressing, authentication and contract
     /// faults over Receive, Process and Send — the four kinds a real integration
     /// suffers, including Let's Encrypt certificate lifecycle faults, which are a
@@ -117,7 +128,7 @@ impl FaultPlan {
     #[allow(clippy::too_many_lines)]
     pub fn realistic() -> Self {
         use Contract::{Bytes, Json, Xml};
-        use FaultKind::{Addressing, Authentication, Contract as Held, Transport};
+        use FaultKind::{Addressing, Contract as Held, Transport};
         use Stage::{Process, Receive, Send};
 
         type Spec = (
@@ -155,22 +166,6 @@ impl FaultPlan {
                 "connection reset by peer",
             ),
             (
-                Receive,
-                Some("http"),
-                None,
-                4,
-                Authentication,
-                "client certificate rejected",
-            ),
-            (
-                Receive,
-                Some("http"),
-                None,
-                3,
-                Authentication,
-                "Let's Encrypt certificate expired; renewal pending",
-            ),
-            (
                 Process,
                 None,
                 Some(Xml),
@@ -185,14 +180,6 @@ impl FaultPlan {
                 4,
                 Held,
                 "malformed content: unexpected token",
-            ),
-            (
-                Process,
-                None,
-                None,
-                2,
-                Authentication,
-                "the session token expired mid-journey",
             ),
             (
                 Send,
@@ -234,30 +221,6 @@ impl FaultPlan {
                 Addressing,
                 "recipient address rejected (550 no such user)",
             ),
-            (
-                Send,
-                Some("http"),
-                None,
-                4,
-                Authentication,
-                "ACME challenge failed: Let's Encrypt could not reach the host",
-            ),
-            (
-                Send,
-                Some("smtp"),
-                None,
-                4,
-                Authentication,
-                "relay access denied (550 5.7.1)",
-            ),
-            (
-                Send,
-                Some("http"),
-                Some(Json),
-                3,
-                Authentication,
-                "the endpoint returned 401 Unauthorized",
-            ),
         ];
 
         Self {
@@ -297,20 +260,23 @@ impl Default for FaultPlan {
 }
 
 /// Whether a rule of the given rate fires for this (stage, pair) this round.
-/// Deterministic: a hash of the four, taken modulo 100, under the rate.
+/// Deterministic: a hash of the composed key, taken modulo 100, under the rate.
 fn fires(rate: u8, stage: Stage, transport: &str, contract: Contract, round: u64) -> bool {
+    let key = format!("{}{transport}{}", stage.name(), contract.name());
+    fires_keyed(rate, &key, round)
+}
+
+/// Whether a rule of the given rate fires for an arbitrary key this round.
+/// Deterministic: a hash of the key's bytes and the round, modulo 100, under the
+/// rate. Shared with `identity.rs` so the identity pipeline faults the same way —
+/// reproducible, varied across rounds, assertable in a test.
+pub(crate) fn fires_keyed(rate: u8, key: &str, round: u64) -> bool {
     if rate == 0 {
         return false;
     }
 
     let mut hash = round.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    for byte in stage.name().bytes() {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3);
-    }
-    for byte in transport.bytes() {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3);
-    }
-    for byte in contract.name().bytes() {
+    for byte in key.bytes() {
         hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3);
     }
 
@@ -333,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn faults_land_on_all_three_stages_and_all_four_kinds() {
+    fn faults_land_on_all_three_stages_and_all_three_kinds() {
         let plan = FaultPlan::realistic();
         let mut stages = std::collections::BTreeSet::new();
         let mut kinds = std::collections::BTreeSet::new();
@@ -353,11 +319,7 @@ mod tests {
         }
 
         assert_eq!(stages.len(), 3, "faults on receive, process and send");
-        assert_eq!(
-            kinds.len(),
-            4,
-            "transport, addressing, authentication and contract"
-        );
+        assert_eq!(kinds.len(), 3, "transport, addressing and contract");
     }
 
     #[test]
@@ -389,12 +351,12 @@ mod tests {
     #[test]
     fn the_evidence_names_the_kind() {
         let fault = Fault {
-            kind: FaultKind::Authentication,
-            reason: "client certificate rejected",
+            kind: FaultKind::Addressing,
+            reason: "the target host did not resolve",
         };
         assert_eq!(
             fault.evidence(),
-            "authentication fault — client certificate rejected"
+            "addressing fault — the target host did not resolve"
         );
     }
 }

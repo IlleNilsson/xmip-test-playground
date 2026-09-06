@@ -144,6 +144,11 @@ pub struct Verdict {
     pub outcome: Outcome,
     /// How many bytes made the round trip. Zero on failure.
     pub bytes: u64,
+    /// A point below the (stage, transport, contract) node, or `None` for the
+    /// transport verdict itself. The identity pipeline sets this to its step —
+    /// `identification`, `authentication`, `authorization` on Receive, `identity`
+    /// on Send — so it publishes as a child an operator drills into. ADR-0019.
+    pub point: Option<&'static str>,
     pub observed_unix_nanos: i64,
 }
 
@@ -165,12 +170,16 @@ impl Verdict {
     /// `<node>/<stage>/<transport>/<contract>`.
     #[must_use]
     pub fn scope(&self, node: &str) -> String {
-        format!(
+        let base = format!(
             "{node}/{}/{}/{}",
             self.stage.name(),
             self.transport,
             self.contract.name()
-        )
+        );
+        match self.point {
+            Some(point) => format!("{base}/{point}"),
+            None => base,
+        }
     }
 
     /// The verdict as a health record for the snapshot.
@@ -208,6 +217,7 @@ mod tests {
             contract: Contract::Text,
             outcome: Outcome::Delivered,
             bytes: 14,
+            point: None,
             observed_unix_nanos: 1,
         };
 
@@ -227,6 +237,7 @@ mod tests {
                 contract: Contract::Json,
                 outcome: Outcome::Delivered,
                 bytes: 1,
+                point: None,
                 observed_unix_nanos: 1,
             };
             assert_eq!(
@@ -244,6 +255,7 @@ mod tests {
             contract: Contract::Bytes,
             outcome: Outcome::OneSided("receive only".to_string()),
             bytes: 0,
+            point: None,
             observed_unix_nanos: 1,
         };
 
@@ -258,6 +270,7 @@ mod tests {
             contract: Contract::Bytes,
             outcome: Outcome::Failed("connection refused".to_string()),
             bytes: 0,
+            point: None,
             observed_unix_nanos: 1,
         };
 
