@@ -40,6 +40,7 @@
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
+pub mod claim;
 pub mod contracts;
 pub mod fault;
 pub mod furious;
@@ -52,6 +53,7 @@ pub mod schedule;
 pub mod secretary;
 pub mod verdict;
 
+pub use claim::Claim;
 pub use contracts::{ContentContract, Shape};
 pub use fault::{Fault, FaultKind, FaultPlan};
 pub use furious::Furious;

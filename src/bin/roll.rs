@@ -9,6 +9,8 @@
 //!   - **furious** — the same pairs, timed against a latency budget (p50/p99).
 //!   - **load** — a megabyte per pair; does it arrive whole and still validate.
 //!   - **secretary** — retention and archiving: keep, archive, purge, by age.
+//!   - **claim** — exclusive pickup: one holder per item under contention, per
+//!     execution style (sequential, parallel, concurrent).
 //!
 //! Each publishes under its own subtree of `xmip:///playground`, merged into one
 //! snapshot so the rollup covers all four and an operator drills scenario →
@@ -26,7 +28,7 @@ use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
 use xmip_test_playground::{
-    FaultPlan, Furious, Load, Schedule, Secretary, activity_toml, history_toml, to_toml,
+    Claim, FaultPlan, Furious, Load, Schedule, Secretary, activity_toml, history_toml, to_toml,
     write_atomic,
 };
 
@@ -46,6 +48,7 @@ fn main() {
         .under_pressure()
         .with_bytes(load_bytes());
     let mut secretary = Secretary::new(format!("{root}/secretary")).under_pressure();
+    let mut claim = Claim::new(format!("{root}/claim"), base.join("claim")).under_pressure();
 
     // An hour of history at one point a second: enough to watch a shift, bounded
     // so a week-long run does not grow. ADR-0029.
@@ -71,6 +74,7 @@ fn main() {
         merge(&mut snapshot, &furious.tick());
         merge(&mut snapshot, &load.tick());
         merge(&mut snapshot, &secretary.tick());
+        merge(&mut snapshot, &claim.tick());
 
         history.record(&snapshot);
 
