@@ -46,6 +46,12 @@ authenticate = { package = "xmip-core-authenticate", git = "https://github.com/I
 authorize = { package = "xmip-core-authorize", git = "https://github.com/IlleNilsson/xmip-core-authorize", branch = "main" }
 context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson/xmip-core-context", branch = "main" }
 
+# The retention and archiving axis: the methodical-secretary scenario drives the
+# real retention policy (keep, archive, delete by age) and the real archive store
+# over a logical clock, so an item's lifecycle is exercised, not mocked.
+retain = { package = "xmip-core-retain", git = "https://github.com/IlleNilsson/xmip-core-retain", branch = "main" }
+archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main" }
+
 # The one real parser the content contracts lean on. JSON well-formedness is a
 # genuine check, not a byte comparison, which is the point of exercising a
 # contract rather than a transport — JSON as content, which is exactly the case

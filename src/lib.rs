@@ -23,21 +23,40 @@
 //! transport declared but not yet implemented is a new adapter away, not a new
 //! test.
 //!
+//! It runs more than one scenario over those adapters, each a different question
+//! asked of the same estate, published under its own subtree of
+//! `xmip:///playground`:
+//!
+//!   - **pingpong** — did it arrive whole and hold its contract, across the
+//!     message-path stages, and does Receive run the identity pipeline and Send
+//!     present identity (ADR-0019).
+//!   - **furious** — did it arrive in time: round-trip latency against a budget,
+//!     judged on p50/p99 over recent rounds.
+//!   - **load** — a megabyte per pair: did it arrive byte-for-byte and still
+//!     validate at size, and how fast.
+//!   - **secretary** — retention and archiving: keep, archive and purge by age,
+//!     driving the real retention policy and archive store.
+//!
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
 pub mod contracts;
 pub mod fault;
+pub mod furious;
 pub mod identity;
+pub mod load;
 pub mod pingpong;
 pub mod report;
 pub mod roundtrip;
 pub mod schedule;
+pub mod secretary;
 pub mod verdict;
 
 pub use contracts::{ContentContract, Shape};
 pub use fault::{Fault, FaultKind, FaultPlan};
+pub use furious::Furious;
 pub use identity::{IdentityFaults, Step};
+pub use load::Load;
 pub use pingpong::ping_pong;
 pub use report::{activity_toml, history_toml, to_toml, write_atomic};
 pub use roundtrip::{
@@ -45,4 +64,5 @@ pub use roundtrip::{
     WebSocketRoundTrip,
 };
 pub use schedule::{CONTRACTS, Schedule};
+pub use secretary::Secretary;
 pub use verdict::{Contract, Outcome, Stage, Verdict};

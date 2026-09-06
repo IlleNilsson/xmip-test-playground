@@ -1,88 +1,90 @@
-//! Roll the playground: run the pingpong test continuously.
+//! Roll the playground: run every scenario continuously.
 //!
-//! `cargo run` ticks the Schedule on an interval and redraws the live matrix
-//! each round — the pingpong test as ADR-0028 means it, over time and never
-//! stopping. Every implemented transport by every content contract, over real
-//! loopback connections, validated against a real contract on arrival.
+//! `cargo run` ticks all four scenarios on an interval and redraws the combined
+//! board each round — the tests as ADR-0028 means them, over time and never
+//! stopping:
 //!
-//! Pass a number to run that many rounds and stop (a bounded look); omit it to
-//! roll until interrupted. When stdout is a terminal the board is redrawn in
-//! place; when it is piped, one summary line per round is appended instead.
+//!   - **pingpong** — every transport by every contract round-trips and holds
+//!     its contract; the message-path stages, with injected faults.
+//!   - **furious** — the same pairs, timed against a latency budget (p50/p99).
+//!   - **load** — a megabyte per pair; does it arrive whole and still validate.
+//!   - **secretary** — retention and archiving: keep, archive, purge, by age.
 //!
-//! After every tick it writes the snapshot to a TOML file the monitoring GUI
-//! reads, so an operator watches the same matrix in the web or desktop UI over
-//! time. The path is `XMIP_PLAYGROUND_SNAPSHOT` if set — an environment variable
-//! is external, so it keeps the prefix — else a well-known temp file the GUI
-//! defaults to as well, the two agreeing with no configuration.
+//! Each publishes under its own subtree of `xmip:///playground`, merged into one
+//! snapshot so the rollup covers all four and an operator drills scenario →
+//! detail → the failing leaf.
+//!
+//! Pass a number to run that many rounds and stop; omit it to roll until
+//! interrupted. When stdout is a terminal the board is redrawn in place; when it
+//! is piped, one summary line per round is appended. After every tick the
+//! snapshot, history and activity are written to the TOML files the monitoring
+//! GUI reads, overridable with `XMIP_PLAYGROUND_SNAPSHOT`, `_HISTORY`, `_ACTIVITY`.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
 use xmip_test_playground::{
-    FaultPlan, Schedule, activity_toml, history_toml, to_toml, write_atomic,
+    FaultPlan, Furious, Load, Schedule, Secretary, activity_toml, history_toml, to_toml,
+    write_atomic,
 };
 
 fn main() {
-    let node = "xmip:///playground";
-    let file_dir = std::env::temp_dir().join("playground");
-    std::fs::remove_dir_all(&file_dir).ok();
+    let root = "xmip:///playground";
+    let base = std::env::temp_dir().join("playground");
+    std::fs::remove_dir_all(&base).ok();
 
-    // The world does not run green: inject the transport, addressing,
-    // authentication and contract faults a real integration suffers, on Receive,
-    // Process and Send. `file` is left clean, one transport that stays green.
-    let mut schedule = Schedule::new(node, &file_dir).with_faults(FaultPlan::realistic());
+    // Each scenario under its own subtree, each with faults or pressure on, so
+    // the board is realistic rather than uniformly green. `file` stays clean in
+    // every one.
+    let mut pingpong = Schedule::new(format!("{root}/pingpong"), base.join("pingpong"))
+        .with_faults(FaultPlan::realistic());
+    let mut furious =
+        Furious::new(format!("{root}/furious"), base.join("furious")).under_pressure();
+    let mut load = Load::new(format!("{root}/load"), base.join("load")).under_pressure();
+    let mut secretary = Secretary::new(format!("{root}/secretary")).under_pressure();
 
     // An hour of history at one point a second: enough to watch a shift, bounded
     // so a week-long run does not grow. ADR-0029.
     let mut history = History::with_capacity(3600);
 
-    let snapshot_path = snapshot_path();
-    let history_path = history_path();
-    let activity_path = activity_path();
+    let snapshot_path = env_path("XMIP_PLAYGROUND_SNAPSHOT", "playground-snapshot.toml");
+    let history_path = env_path("XMIP_PLAYGROUND_HISTORY", "playground-history.toml");
+    let activity_path = env_path("XMIP_PLAYGROUND_ACTIVITY", "playground-activity.toml");
     let limit: Option<u64> = std::env::args().nth(1).and_then(|arg| arg.parse().ok());
     let live = std::io::stdout().is_terminal();
     let interval = Duration::from_millis(1000);
 
     if !live {
         println!("publishing snapshots to {}", snapshot_path.display());
-        println!("publishing history to   {}", history_path.display());
     }
 
     let mut round: u64 = 0;
     loop {
         round += 1;
-        let snapshot = schedule.tick();
+
+        let mut snapshot = Snapshot::new();
+        merge(&mut snapshot, &pingpong.tick());
+        merge(&mut snapshot, &furious.tick());
+        merge(&mut snapshot, &load.tick());
+        merge(&mut snapshot, &secretary.tick());
+
         history.record(&snapshot);
 
-        if let Err(error) = write_atomic(&snapshot_path, &to_toml(node, &snapshot)) {
-            eprintln!(
-                "could not write the snapshot to {}: {error}",
-                snapshot_path.display()
-            );
-        }
-
-        if let Err(error) = write_atomic(&history_path, &history_toml(node, &history)) {
-            eprintln!(
-                "could not write the history to {}: {error}",
-                history_path.display()
-            );
-        }
-
-        if let Err(error) = write_atomic(&activity_path, &activity_toml(node, schedule.activity()))
-        {
-            eprintln!(
-                "could not write the activity to {}: {error}",
-                activity_path.display()
-            );
-        }
+        write(&snapshot_path, &to_toml(root, &snapshot), "snapshot");
+        write(&history_path, &history_toml(root, &history), "history");
+        write(
+            &activity_path,
+            &activity_toml(root, pingpong.activity()),
+            "activity",
+        );
 
         if live {
-            redraw(node, round, &snapshot);
+            redraw(root, round, &snapshot);
             println!("  publishing to {}", snapshot_path.display());
         } else {
-            summarise(node, round, &snapshot);
+            summarise(root, round, &snapshot);
         }
 
         if limit.is_some_and(|limit| round >= limit) {
@@ -91,62 +93,62 @@ fn main() {
         std::thread::sleep(interval);
     }
 
-    std::fs::remove_dir_all(&file_dir).ok();
+    std::fs::remove_dir_all(&base).ok();
 }
 
-/// Where the snapshot is written for the GUI to read: the environment override,
-/// or the well-known temp file the GUI defaults to as well.
-fn snapshot_path() -> PathBuf {
-    std::env::var_os("XMIP_PLAYGROUND_SNAPSHOT").map_or_else(
-        || std::env::temp_dir().join("playground-snapshot.toml"),
-        PathBuf::from,
-    )
+/// Copy every health record and count from one scenario's snapshot into the
+/// combined one. Scopes are disjoint per scenario, so nothing collides.
+fn merge(into: &mut Snapshot, from: &Snapshot) {
+    for record in from.health_records() {
+        into.record_health(record.clone());
+    }
+    for count in from.all_counts() {
+        into.record_count(count.clone());
+    }
 }
 
-/// Where the throughput history is written for the CLI and UI to read.
-fn history_path() -> PathBuf {
-    std::env::var_os("XMIP_PLAYGROUND_HISTORY").map_or_else(
-        || std::env::temp_dir().join("playground-history.toml"),
-        PathBuf::from,
-    )
+/// A publish path: the environment override, or the well-known temp file the GUI
+/// defaults to as well. The variable is external, so it keeps the prefix.
+fn env_path(variable: &str, default: &str) -> PathBuf {
+    std::env::var_os(variable).map_or_else(|| std::env::temp_dir().join(default), PathBuf::from)
 }
 
-/// Where the recent individual items are written for the item view to read.
-fn activity_path() -> PathBuf {
-    std::env::var_os("XMIP_PLAYGROUND_ACTIVITY").map_or_else(
-        || std::env::temp_dir().join("playground-activity.toml"),
-        PathBuf::from,
-    )
+fn write(path: &Path, contents: &str, what: &str) {
+    if let Err(error) = write_atomic(path, contents) {
+        eprintln!("could not write the {what} to {}: {error}", path.display());
+    }
 }
 
 /// The full board, cleared and reprinted in place — a live terminal view.
 fn redraw(node: &str, round: u64, snapshot: &Snapshot) {
     print!("\x1b[2J\x1b[H");
-    println!("Xmip Playground — rolling the pingpong test   (round {round})");
-    println!("{:-<74}", "");
+    println!("Xmip Playground — rolling every scenario   (round {round})");
+    println!("{:-<86}", "");
 
     for record in pairs(node, snapshot) {
-        let pair = record
+        let leaf = record
             .scope
             .strip_prefix(&format!("{node}/"))
             .unwrap_or(&record.scope);
         println!(
-            "  {:<28} {:<7} sev {:>3}   {}",
-            pair,
+            "  {:<44} {:<7} sev {:>3}   {}",
+            leaf,
             word(record.health),
             record.severity,
             record.evidence
         );
     }
 
-    let count = pairs(node, snapshot).len();
-    println!("{:-<74}", "");
-    println!("  {}", rollup(node, snapshot, count));
+    println!("{:-<86}", "");
+    println!(
+        "  rollup at {node}: {}",
+        word(snapshot.worst(node).unwrap_or(Health::Green))
+    );
     println!("\n  ctrl-c to stop");
 }
 
-/// One line per round, for a piped run: the rollup, and the worst pair when it
-/// is not green.
+/// One line per round, for a piped run: the rollup, and the worst leaf when it is
+/// not green.
 fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
     let worst = snapshot.worst(node).map_or("NONE", word);
     let count = pairs(node, snapshot).len();
@@ -158,18 +160,13 @@ fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
             format!("  — worst {}: {}", record.scope, record.evidence)
         });
 
-    println!("round {round:>4}: {worst}  ({count} pairs){trouble}");
+    println!("round {round:>4}: {worst}  ({count} leaves){trouble}");
 }
 
 fn pairs(node: &str, snapshot: &Snapshot) -> Vec<observe::HealthRecord> {
     let mut records = snapshot.health(node);
     records.sort_by(|left, right| left.scope.cmp(&right.scope));
     records
-}
-
-fn rollup(node: &str, snapshot: &Snapshot, pairs: usize) -> String {
-    let worst = snapshot.worst(node).map_or("NONE", word);
-    format!("rollup at {node}: {worst}   ({pairs} verdicts across receive, process and send)")
 }
 
 fn word(health: Health) -> &'static str {

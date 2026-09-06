@@ -372,7 +372,7 @@ fn rate_severity(tally: &Tally) -> u8 {
     rate.clamp(1, 80) as u8
 }
 
-fn now_unix_nanos() -> i64 {
+pub(crate) fn now_unix_nanos() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| {
