@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn a_one_sided_transport_is_yellow_not_red() {
+    fn a_one_sided_transport_is_stressed_not_done() {
         let verdict = Verdict {
             stage: Stage::Send,
             transport: "mdns".to_string(),
@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_is_red_and_carries_the_reason() {
+    fn a_failure_is_done_and_carries_the_reason() {
         let verdict = Verdict {
             stage: Stage::Process,
             transport: "tcp".to_string(),

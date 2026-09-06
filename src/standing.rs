@@ -1,9 +1,9 @@
 //! A scope's standing over the rounds it has run, and the health it publishes.
 //!
 //! Three scenarios — load, secretary, claim — judge a scope the same way: each
-//! round passes, warns or fails; the scope reads green while it is passing with
-//! a clean history, yellow while it passes now but has failed before (or warned
-//! this round), red the round it fails. This is that one judgement, so each
+//! round passes, warns or fails; the scope reads `Fine` while it is passing with
+//! a clean history, `Stressed` while it passes now but has failed before (or
+//! warned this round), `Done` the round it fails. This is that one judgement, so each
 //! scenario keeps only what is unique to it. Pingpong keeps its own, richer,
 //! Outcome-based tally in `schedule.rs` (it scales severity with the failure
 //! rate); the rest share this.
@@ -77,7 +77,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_after_a_failure_is_yellow() {
+    fn a_pass_after_a_failure_is_stressed() {
         let mut standing = Standing::default();
         standing.record(Mark::Fail, "broke");
         standing.record(Mark::Pass, "recovered");
@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_round_is_red_and_a_warn_is_yellow() {
+    fn a_failing_round_is_done_and_a_warn_is_stressed() {
         let mut standing = Standing::default();
         standing.record(Mark::Fail, "broke");
         assert_eq!(standing.health("s", 1).health, Health::Done);

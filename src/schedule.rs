@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn injected_faults_turn_pairs_red_but_leave_file_green() {
+    fn injected_faults_turn_pairs_done_but_leave_file_fine() {
         let dir = scratch("faults");
         let mut schedule =
             Schedule::new("xmip:///playground", &dir).with_faults(FaultPlan::realistic());
