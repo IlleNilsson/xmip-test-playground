@@ -316,30 +316,30 @@ fn over_time(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
 
     let (health, severity, evidence) = match &tally.last {
         Some(Outcome::Delivered) if tally.failures == 0 => (
-            Health::Green,
+            Health::Fine,
             0,
             format!("{passed}/{} rounds passed", tally.rounds),
         ),
         Some(Outcome::Delivered) => (
             // Passing now, but it has failed before — a yellow that says so,
             // deepening with how often it has failed.
-            Health::Yellow,
+            Health::Average,
             rate_severity(tally),
             format!(
                 "{passed}/{} rounds passed, {} failed",
                 tally.rounds, tally.failures
             ),
         ),
-        Some(Outcome::OneSided(why)) => (Health::Yellow, 40, why.clone()),
+        Some(Outcome::OneSided(why)) => (Health::Average, 40, why.clone()),
         Some(Outcome::Failed(why)) => (
-            Health::Red,
+            Health::Done,
             90,
             format!(
                 "{why} — {} of {} rounds have failed",
                 tally.failures, tally.rounds
             ),
         ),
-        None => (Health::Yellow, 40, "not yet run".to_string()),
+        None => (Health::Average, 40, "not yet run".to_string()),
     };
 
     HealthRecord {
@@ -386,7 +386,7 @@ mod tests {
                 CONTRACTS.len() * per_contract,
                 "{per_contract} record(s) per contract at {stage}"
             );
-            assert!(records.iter().all(|r| r.health == Health::Green));
+            assert!(records.iter().all(|r| r.health == Health::Fine));
         }
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -397,7 +397,7 @@ mod tests {
         let mut schedule = Schedule::new("xmip:///playground", &dir);
 
         let snapshot = schedule.tick();
-        assert_eq!(snapshot.worst("xmip:///playground"), Some(Health::Green));
+        assert_eq!(snapshot.worst("xmip:///playground"), Some(Health::Fine));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -414,12 +414,12 @@ mod tests {
 
         assert_eq!(
             snapshot.worst("xmip:///playground"),
-            Some(Health::Red),
-            "faults should surface"
+            Some(Health::Holding),
+            "faults should surface — a Done leaf rolls up to Holding (ADR-0041)"
         );
         assert_eq!(
             snapshot.worst("xmip:///playground/receive/file"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "file is left alone"
         );
         std::fs::remove_dir_all(&dir).ok();

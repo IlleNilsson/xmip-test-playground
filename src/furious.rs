@@ -173,7 +173,7 @@ impl Furious {
         if n == 0 {
             return HealthRecord {
                 scope: scope.to_string(),
-                health: Health::Green,
+                health: Health::Fine,
                 severity: 0,
                 evidence: "warming up".to_string(),
                 observed_unix_nanos: now,
@@ -181,11 +181,11 @@ impl Furious {
         }
 
         let (health, severity) = if p99 <= budget {
-            (Health::Green, 0)
+            (Health::Fine, 0)
         } else if p99 <= budget * 2 {
-            (Health::Yellow, 45)
+            (Health::Average, 45)
         } else {
-            (Health::Red, 90)
+            (Health::Done, 90)
         };
 
         HealthRecord {
@@ -211,7 +211,7 @@ fn millis(micros: u64) -> String {
 fn yellow(scope: &str, why: String, now: i64) -> HealthRecord {
     HealthRecord {
         scope: scope.to_string(),
-        health: Health::Yellow,
+        health: Health::Average,
         severity: 40,
         evidence: why,
         observed_unix_nanos: now,
@@ -221,7 +221,7 @@ fn yellow(scope: &str, why: String, now: i64) -> HealthRecord {
 fn red(scope: &str, why: String, now: i64) -> HealthRecord {
     HealthRecord {
         scope: scope.to_string(),
-        health: Health::Red,
+        health: Health::Done,
         severity: 90,
         evidence: why,
         observed_unix_nanos: now,
@@ -243,7 +243,7 @@ mod tests {
         }
         assert_eq!(
             snapshot.worst("xmip:///playground/furious"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "loopback beats every budget with no spikes"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -259,13 +259,13 @@ mod tests {
         }
         assert_eq!(
             snapshot.worst("xmip:///playground/furious"),
-            Some(Health::Red),
-            "injected spikes should drive p99 past a budget"
+            Some(Health::Holding),
+            "injected spikes should drive p99 past a budget — a Done rolls up to Holding (ADR-0041)"
         );
         // file never spikes: it stays green.
         assert_eq!(
             snapshot.worst("xmip:///playground/furious/file"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "file is left fast"
         );
         std::fs::remove_dir_all(&dir).ok();

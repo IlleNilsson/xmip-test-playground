@@ -325,12 +325,12 @@ mod tests {
         let snapshot = hl.tick();
         assert_eq!(
             snapshot.worst("xmip:///playground/load/file"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "file carries a megabyte"
         );
         assert_eq!(
             snapshot.worst("xmip:///playground/load/tcp"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "tcp carries a megabyte"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -343,7 +343,7 @@ mod tests {
         let snapshot = hl.tick();
         assert_ne!(
             snapshot.worst("xmip:///playground/load/udp"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "a datagram cannot hold a megabyte"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -374,7 +374,7 @@ mod tests {
             .into_iter()
             .next()
             .expect("a file record");
-        assert_eq!(file.health, Health::Green);
+        assert_eq!(file.health, Health::Fine);
         assert!(
             file.evidence.contains("integrity only"),
             "no parse above the ceiling"

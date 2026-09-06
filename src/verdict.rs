@@ -187,12 +187,12 @@ impl Verdict {
     pub fn health(&self, node: &str) -> HealthRecord {
         let (health, severity, evidence) = match &self.outcome {
             Outcome::Delivered => (
-                Health::Green,
+                Health::Fine,
                 0,
                 format!("{} bytes out and back", self.bytes),
             ),
-            Outcome::OneSided(why) => (Health::Yellow, 40, why.clone()),
-            Outcome::Failed(why) => (Health::Red, 90, why.clone()),
+            Outcome::OneSided(why) => (Health::Average, 40, why.clone()),
+            Outcome::Failed(why) => (Health::Done, 90, why.clone()),
         };
 
         HealthRecord {
@@ -224,7 +224,7 @@ mod tests {
         let record = verdict.health("xmip:///playground");
 
         assert_eq!(record.scope, "xmip:///playground/receive/file/text");
-        assert_eq!(record.health, Health::Green);
+        assert_eq!(record.health, Health::Fine);
         assert!(record.evidence.contains("14 bytes"));
     }
 
@@ -259,7 +259,7 @@ mod tests {
             observed_unix_nanos: 1,
         };
 
-        assert_eq!(verdict.health("xmip:///p").health, Health::Yellow);
+        assert_eq!(verdict.health("xmip:///p").health, Health::Average);
     }
 
     #[test]
@@ -275,7 +275,7 @@ mod tests {
         };
 
         let record = verdict.health("xmip:///p");
-        assert_eq!(record.health, Health::Red);
+        assert_eq!(record.health, Health::Done);
         assert_eq!(record.evidence, "connection refused");
     }
 }

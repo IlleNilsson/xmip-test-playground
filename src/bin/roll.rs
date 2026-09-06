@@ -205,7 +205,7 @@ fn redraw(node: &str, round: u64, snapshot: &Snapshot) {
     println!("{:-<86}", "");
     println!(
         "  rollup at {node}: {}",
-        word(snapshot.worst(node).unwrap_or(Health::Green))
+        word(snapshot.worst(node).unwrap_or(Health::Fine))
     );
     println!("\n  ctrl-c to stop");
 }
@@ -218,7 +218,7 @@ fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
 
     let trouble = pairs(node, snapshot)
         .into_iter()
-        .find(|record| record.health != Health::Green)
+        .find(|record| record.health != Health::Fine)
         .map_or_else(String::new, |record| {
             format!("  — worst {}: {}", record.scope, record.evidence)
         });
@@ -234,8 +234,9 @@ fn pairs(node: &str, snapshot: &Snapshot) -> Vec<observe::HealthRecord> {
 
 fn word(health: Health) -> &'static str {
     match health {
-        Health::Green => "GREEN",
-        Health::Yellow => "YELLOW",
-        Health::Red => "RED",
+        Health::Fine => "FINE",
+        Health::Average => "AVERAGE",
+        Health::Holding => "HOLDING",
+        Health::Done => "DONE",
     }
 }

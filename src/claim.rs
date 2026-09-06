@@ -379,7 +379,7 @@ mod tests {
         }
         assert_eq!(
             snapshot.worst("xmip:///playground/claim/file"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "the atomic rename claim holds under contention"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -392,7 +392,8 @@ mod tests {
         let mut saw_red = false;
         for _ in 0..80 {
             let snapshot = claim.tick();
-            if snapshot.worst("xmip:///playground/claim/file") == Some(Health::Red) {
+            // A Done leaf rolls up to Holding at the aggregate (ADR-0041).
+            if snapshot.worst("xmip:///playground/claim/file") == Some(Health::Holding) {
                 saw_red = true;
                 break;
             }
@@ -415,7 +416,7 @@ mod tests {
         for style in ["sequential", "parallel", "concurrent"] {
             assert_eq!(
                 snapshot.worst(&format!("xmip:///playground/claim/file/{style}")),
-                Some(Health::Green),
+                Some(Health::Fine),
                 "{style} holds the claim"
             );
         }

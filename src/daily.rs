@@ -184,7 +184,7 @@ mod tests {
         let mut cleared = false;
         for _ in 0..30 {
             let snapshot = daily.tick();
-            if snapshot.worst("xmip:///playground/daily") == Some(Health::Green) && daily.scaled {
+            if snapshot.worst("xmip:///playground/daily") == Some(Health::Fine) && daily.scaled {
                 cleared = true;
             }
         }

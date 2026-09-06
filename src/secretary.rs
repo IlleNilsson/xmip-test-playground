@@ -344,7 +344,7 @@ mod tests {
         let snapshot = run(&mut secretary, 10, 120);
         assert_eq!(
             snapshot.worst("xmip:///playground/secretary"),
-            Some(Health::Green),
+            Some(Health::Fine),
             "a clean secretary never leaks"
         );
         assert!(
@@ -411,7 +411,8 @@ mod tests {
         for round in 1..=130 {
             let simulated = Duration::from_secs(round * 10 * SECONDS_PER_DAY);
             let snapshot = secretary.tick(simulated);
-            if snapshot.worst("xmip:///playground/secretary") == Some(Health::Red) {
+            // A Done leaf rolls up to Holding at the node (ADR-0041).
+            if snapshot.worst("xmip:///playground/secretary") == Some(Health::Holding) {
                 ever_red = true;
             }
         }

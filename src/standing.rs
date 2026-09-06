@@ -46,13 +46,13 @@ impl Standing {
     #[must_use]
     pub fn health(&self, scope: &str, now: i64) -> HealthRecord {
         let (health, severity) = if self.last_pass && self.failures == 0 {
-            (Health::Green, 0)
+            (Health::Fine, 0)
         } else if self.last_pass {
-            (Health::Yellow, 45)
+            (Health::Average, 45)
         } else if self.last_warn {
-            (Health::Yellow, 40)
+            (Health::Average, 40)
         } else {
-            (Health::Red, 90)
+            (Health::Done, 90)
         };
 
         HealthRecord {
@@ -73,7 +73,7 @@ mod tests {
     fn a_clean_pass_is_green() {
         let mut standing = Standing::default();
         standing.record(Mark::Pass, "all good");
-        assert_eq!(standing.health("s", 1).health, Health::Green);
+        assert_eq!(standing.health("s", 1).health, Health::Fine);
     }
 
     #[test]
@@ -81,15 +81,15 @@ mod tests {
         let mut standing = Standing::default();
         standing.record(Mark::Fail, "broke");
         standing.record(Mark::Pass, "recovered");
-        assert_eq!(standing.health("s", 1).health, Health::Yellow);
+        assert_eq!(standing.health("s", 1).health, Health::Average);
     }
 
     #[test]
     fn a_failing_round_is_red_and_a_warn_is_yellow() {
         let mut standing = Standing::default();
         standing.record(Mark::Fail, "broke");
-        assert_eq!(standing.health("s", 1).health, Health::Red);
+        assert_eq!(standing.health("s", 1).health, Health::Done);
         standing.record(Mark::Warn, "one-sided");
-        assert_eq!(standing.health("s", 1).health, Health::Yellow);
+        assert_eq!(standing.health("s", 1).health, Health::Average);
     }
 }
