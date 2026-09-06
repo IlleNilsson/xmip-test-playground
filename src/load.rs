@@ -22,10 +22,7 @@ use stream::Stream;
 use xcore::StreamId;
 
 use crate::fault::fires_keyed;
-use crate::roundtrip::{
-    Exchange, FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
-    WebSocketRoundTrip,
-};
+use crate::roundtrip::{Exchange, RoundTrip, all_transports};
 use crate::schedule::{CONTRACTS, now_unix_nanos};
 use crate::verdict::Contract;
 
@@ -68,14 +65,7 @@ impl Load {
     /// A size exercise publishing under `node`, with no injected drops.
     #[must_use]
     pub fn new(node: impl Into<String>, file_dir: impl Into<std::path::PathBuf>) -> Self {
-        let transports: Vec<Box<dyn RoundTrip>> = vec![
-            Box::new(FileRoundTrip::new(file_dir)),
-            Box::new(TcpRoundTrip::new()),
-            Box::new(HttpRoundTrip::new()),
-            Box::new(SmtpRoundTrip::new()),
-            Box::new(UdpRoundTrip::new()),
-            Box::new(WebSocketRoundTrip::new()),
-        ];
+        let transports = all_transports(file_dir);
 
         Self {
             node: node.into(),

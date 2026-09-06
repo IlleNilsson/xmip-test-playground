@@ -20,10 +20,7 @@ use observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Sn
 use crate::fault::FaultPlan;
 use crate::identity::{self, IdentityFaults};
 use crate::pingpong::ping_pong;
-use crate::roundtrip::{
-    FileRoundTrip, HttpRoundTrip, RoundTrip, SmtpRoundTrip, TcpRoundTrip, UdpRoundTrip,
-    WebSocketRoundTrip,
-};
+use crate::roundtrip::{RoundTrip, all_transports};
 use crate::verdict::{Contract, Outcome, Stage, Verdict};
 
 /// One pair's record over time: how many rounds it has run, how many failed,
@@ -81,14 +78,7 @@ impl Schedule {
     /// transport ping-pongs.
     #[must_use]
     pub fn new(node: impl Into<String>, file_dir: impl Into<std::path::PathBuf>) -> Self {
-        let transports: Vec<Box<dyn RoundTrip>> = vec![
-            Box::new(FileRoundTrip::new(file_dir)),
-            Box::new(TcpRoundTrip::new()),
-            Box::new(HttpRoundTrip::new()),
-            Box::new(SmtpRoundTrip::new()),
-            Box::new(UdpRoundTrip::new()),
-            Box::new(WebSocketRoundTrip::new()),
-        ];
+        let transports = all_transports(file_dir);
 
         Self {
             node: node.into(),

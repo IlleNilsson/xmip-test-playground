@@ -42,6 +42,21 @@ pub trait RoundTrip {
     fn exchange(&self, payload: &[u8]) -> Exchange;
 }
 
+/// Every implemented transport, each behind its adapter — the one list the
+/// scenarios share, so a new transport is wired in a single place rather than in
+/// each scenario. `file_dir` is where the file transport ping-pongs.
+#[must_use]
+pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn RoundTrip>> {
+    vec![
+        Box::new(FileRoundTrip::new(file_dir)),
+        Box::new(TcpRoundTrip::new()),
+        Box::new(HttpRoundTrip::new()),
+        Box::new(SmtpRoundTrip::new()),
+        Box::new(UdpRoundTrip::new()),
+        Box::new(WebSocketRoundTrip::new()),
+    ]
+}
+
 /// File: send into a directory, read it back from the same directory. The
 /// self-contained case, and the reason file was first.
 pub struct FileRoundTrip {
