@@ -30,8 +30,8 @@ use std::sync::{Arc, Mutex};
 use observe::{HealthRecord, Snapshot};
 
 use crate::fault::fires_keyed;
-use crate::schedule::now_unix_nanos;
 use crate::standing::{Mark, Standing};
+use crate::support::now_unix_nanos;
 
 /// Competing reader threads per round.
 const READERS: usize = 4;
@@ -366,13 +366,8 @@ fn ordered_per_key(processed: &[Processed]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::scratch;
     use observe::Health;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-claim-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
 
     #[test]
     fn the_atomic_claim_gives_every_item_one_holder() {

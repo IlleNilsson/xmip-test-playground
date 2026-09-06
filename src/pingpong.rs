@@ -59,12 +59,7 @@ pub fn ping_pong(transport: &dyn RoundTrip, contract: Contract) -> (Outcome, u64
 mod tests {
     use super::*;
     use crate::roundtrip::{FileRoundTrip, TcpRoundTrip};
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-pingpong-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
+    use crate::support::scratch;
 
     #[test]
     fn a_payload_that_makes_the_round_trip_over_file_is_delivered() {

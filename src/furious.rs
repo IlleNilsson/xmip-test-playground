@@ -20,7 +20,8 @@ use observe::{Health, HealthRecord, Snapshot};
 
 use crate::fault::fires_keyed;
 use crate::roundtrip::{Exchange, RoundTrip, all_transports};
-use crate::schedule::{CONTRACTS, now_unix_nanos};
+use crate::schedule::CONTRACTS;
+use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
 /// How many recent latencies each pair keeps for its percentiles.
@@ -230,12 +231,7 @@ fn red(scope: &str, why: String, now: i64) -> HealthRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-furious-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
+    use crate::support::scratch;
 
     #[test]
     fn a_clean_run_stays_within_budget_and_is_green() {

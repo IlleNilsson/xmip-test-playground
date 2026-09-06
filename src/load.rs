@@ -23,8 +23,9 @@ use xcore::StreamId;
 
 use crate::fault::fires_keyed;
 use crate::roundtrip::{Exchange, RoundTrip, all_transports};
-use crate::schedule::{CONTRACTS, now_unix_nanos};
+use crate::schedule::CONTRACTS;
 use crate::standing::{Mark, Standing};
+use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
 /// The default size of one load, in bytes. A megabyte: large enough that a UDP
@@ -314,13 +315,8 @@ pub fn as_stream(contract: Contract, bytes: Vec<u8>) -> Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::scratch;
     use observe::Health;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-load-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
 
     #[test]
     fn a_large_payload_round_trips_over_file_and_tcp() {

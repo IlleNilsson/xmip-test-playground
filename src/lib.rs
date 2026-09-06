@@ -36,10 +36,14 @@
 //!     validate at size, and how fast.
 //!   - **secretary** — retention and archiving: keep, archive and purge by age,
 //!     driving the real retention policy and archive store.
+//!   - **claim** — exclusive pickup: one holder per item under contention, per
+//!     execution style (sequential, parallel, concurrent).
+//!   - **daily** — drain a backlog as fast as possible; tweak, then add a node.
 //!
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
+pub mod budget;
 pub mod claim;
 pub mod contracts;
 pub mod daily;
@@ -53,8 +57,10 @@ pub mod roundtrip;
 pub mod schedule;
 pub mod secretary;
 pub mod standing;
+mod support;
 pub mod verdict;
 
+pub use budget::Budget;
 pub use claim::Claim;
 pub use contracts::{ContentContract, Shape};
 pub use daily::Daily;

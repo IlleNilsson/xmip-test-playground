@@ -342,12 +342,7 @@ fn judge(caught: transport::Result<transport::Arrived>, sent: Sent) -> Exchange 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-rt-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
+    use crate::support::scratch;
 
     #[test]
     fn file_round_trips_a_payload() {

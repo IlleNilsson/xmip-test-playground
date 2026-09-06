@@ -23,8 +23,9 @@ use observe::{HealthRecord, Snapshot};
 use retain::{RetentionAction, RetentionPolicy};
 
 use crate::fault::fires_keyed;
-use crate::schedule::{CONTRACTS, now_unix_nanos};
+use crate::schedule::CONTRACTS;
 use crate::standing::{Mark, Standing};
+use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
 /// How long an item is kept before it is archived, and how long it is archived

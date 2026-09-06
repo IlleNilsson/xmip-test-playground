@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use observe::{Count, Counted, Snapshot};
 
-use crate::schedule::now_unix_nanos;
 use crate::standing::{Mark, Standing};
+use crate::support::now_unix_nanos;
 
 /// Files that arrive each round — the day's steady inflow.
 const ARRIVAL: usize = 30;
@@ -174,13 +174,8 @@ fn count(dir: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::scratch;
     use observe::Health;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-daily-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
 
     #[test]
     fn a_backlog_escalates_through_a_tweak_then_a_node_and_clears() {

@@ -18,10 +18,15 @@
 //! detail → the failing leaf.
 //!
 //! Pass a number to run that many rounds and stop; omit it to roll until
-//! interrupted. When stdout is a terminal the board is redrawn in place; when it
-//! is piped, one summary line per round is appended. After every tick the
-//! snapshot, history and activity are written to the TOML files the monitoring
-//! GUI reads, overridable with `XMIP_PLAYGROUND_SNAPSHOT`, `_HISTORY`, `_ACTIVITY`.
+//! interrupted. Two time limits bound any roll (ADR-0028): a maximum wall-clock
+//! time, `XMIP_PLAYGROUND_MAX_SECONDS`, and a factor on time,
+//! `XMIP_PLAYGROUND_TIME_FACTOR` — `1.0` mimics real time, below one runs
+//! faster, above one slower.
+//!
+//! When stdout is a terminal the board is redrawn in place; when it is piped,
+//! one summary line per round is appended. After every tick the snapshot,
+//! history and activity are written to the TOML files the monitoring GUI reads,
+//! overridable with `XMIP_PLAYGROUND_SNAPSHOT`, `_HISTORY`, `_ACTIVITY`.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -29,8 +34,8 @@ use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
 use xmip_test_playground::{
-    Claim, Daily, FaultPlan, Furious, Load, Schedule, Secretary, activity_toml, history_toml,
-    to_toml, write_atomic,
+    Budget, Claim, Daily, FaultPlan, Furious, Load, Schedule, Secretary, activity_toml,
+    history_toml, to_toml, write_atomic,
 };
 
 fn main() {
@@ -61,7 +66,8 @@ fn main() {
     let activity_path = env_path("XMIP_PLAYGROUND_ACTIVITY", "playground-activity.toml");
     let limit: Option<u64> = std::env::args().nth(1).and_then(|arg| arg.parse().ok());
     let live = std::io::stdout().is_terminal();
-    let interval = Duration::from_millis(1000);
+    let real = Duration::from_millis(1000);
+    let budget = Budget::new(max_seconds(), time_factor());
 
     if !live {
         println!("publishing snapshots to {}", snapshot_path.display());
@@ -96,10 +102,10 @@ fn main() {
             summarise(root, round, &snapshot);
         }
 
-        if limit.is_some_and(|limit| round >= limit) {
+        if limit.is_some_and(|limit| round >= limit) || budget.expired() {
             break;
         }
-        std::thread::sleep(interval);
+        std::thread::sleep(budget.interval(real));
     }
 
     std::fs::remove_dir_all(&base).ok();
@@ -144,6 +150,26 @@ fn load_bytes() -> usize {
         .trim()
         .parse::<usize>()
         .map_or(1024 * 1024, |value| value.saturating_mul(scale))
+}
+
+/// The maximum wall-clock time to roll: `XMIP_PLAYGROUND_MAX_SECONDS` if set,
+/// else no ceiling. The variable is external, so it keeps the prefix.
+fn max_seconds() -> Option<Duration> {
+    std::env::var("XMIP_PLAYGROUND_MAX_SECONDS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .filter(|seconds| *seconds > 0.0)
+        .map(Duration::from_secs_f64)
+}
+
+/// The factor on time: `XMIP_PLAYGROUND_TIME_FACTOR` if set, else `1.0` (real
+/// time). Below one runs faster than real time, above one slower. The variable
+/// is external, so it keeps the prefix.
+fn time_factor() -> f64 {
+    std::env::var("XMIP_PLAYGROUND_TIME_FACTOR")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .unwrap_or(1.0)
 }
 
 fn write(path: &Path, contents: &str, what: &str) {

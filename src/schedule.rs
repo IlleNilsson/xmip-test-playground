@@ -13,7 +13,6 @@
 //! drives many rounds without waiting on a clock.
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
 
@@ -21,6 +20,7 @@ use crate::fault::FaultPlan;
 use crate::identity::{self, IdentityFaults};
 use crate::pingpong::ping_pong;
 use crate::roundtrip::{RoundTrip, all_transports};
+use crate::support::now_unix_nanos;
 use crate::verdict::{Contract, Outcome, Stage, Verdict};
 
 /// One pair's record over time: how many rounds it has run, how many failed,
@@ -362,24 +362,11 @@ fn rate_severity(tally: &Tally) -> u8 {
     rate.clamp(1, 80) as u8
 }
 
-pub(crate) fn now_unix_nanos() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            i64::try_from(since.as_nanos()).unwrap_or(i64::MAX)
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::support::scratch;
     use observe::Health;
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("xmip-schedule-{name}"));
-        std::fs::remove_dir_all(&dir).ok();
-        dir
-    }
 
     #[test]
     fn a_tick_reports_every_pair_across_the_three_stages() {
