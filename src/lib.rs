@@ -34,8 +34,9 @@
 //!     judged on p50/p99 over recent rounds.
 //!   - **load** — a megabyte per pair: did it arrive byte-for-byte and still
 //!     validate at size, and how fast.
-//!   - **secretary** — retention and archiving: keep, archive and purge by age,
-//!     driving the real retention policy and archive store.
+//!   - **secretary** — retention and archiving: retain, then archive by age,
+//!     driving the real retention policy and archive store. Xmip does not delete
+//!     (ADR-0040).
 //!   - **claim** — exclusive pickup: one holder per item under contention, per
 //!     execution style (sequential, parallel, concurrent).
 //!   - **daily** — drain a backlog as fast as possible; tweak, then add a node.

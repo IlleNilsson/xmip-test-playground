@@ -8,7 +8,8 @@
 //!     its contract; the message-path stages, with injected faults.
 //!   - **furious** — the same pairs, timed against a latency budget (p50/p99).
 //!   - **load** — a megabyte per pair; does it arrive whole and still validate.
-//!   - **secretary** — retention and archiving: keep, archive, purge, by age.
+//!   - **secretary** — retention and archiving: retain, then archive by age
+//!     (Xmip does not delete, ADR-0040).
 //!   - **claim** — exclusive pickup: one holder per item under contention, per
 //!     execution style (sequential, parallel, concurrent).
 //!   - **daily** — drain a backlog as fast as possible; tweak, then add a node.

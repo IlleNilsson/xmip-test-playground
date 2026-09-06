@@ -1,26 +1,25 @@
 //! The secretary scenario: retention and archiving, done methodically over a
 //! **simulated clock** so a long records horizon plays out in a short run.
 //!
-//! ADR-0028; ADR-0013 and the observability model own retention. Where pingpong
-//! watches a message cross the wire, the secretary watches it age: an item is
-//! **kept** while it is young, **archived** when it passes its retention window,
-//! and **purged** when it passes its archive window. It drives the estate's real
-//! [`RetentionPolicy`] (keep, archive, delete by age) and real [`ArchiveStore`].
+//! ADR-0028; ADR-0013 and the observability model own retention; ADR-0040 sets
+//! the boundary. Where pingpong watches a message cross the wire, the secretary
+//! watches it age: an item is **retained** while it is young, and **archived**
+//! once it passes its retention window. There is no third act — **Xmip retains
+//! and archives, it does not delete** (ADR-0040). Once archived, what becomes of
+//! the archive is the archive owner's decision, not Xmip's.
 //!
 //! Time is simulated. Each `tick` is handed how much simulated time has elapsed
 //! (the roll's `Budget` factor, ADR-0028: factor 1.0 is real time, retracted it
 //! runs faster), so fifteen real minutes can carry three simulated years. Items
 //! are created at a steady **one per content class per simulated day**, and aged
-//! against realistic windows — kept 90 days, archived two years, then purged —
-//! so an operator watches records born, cross into the archive, and fall out of
-//! it, rather than a toy churn.
+//! against a realistic window — retained 90 days, then archived — so an operator
+//! watches records born, live out their retention, and cross into the archive.
 //!
-//! Three stages, per content class: **retain**, **archive**, **purge**. Green
-//! while every item is in the bucket its age dictates; **red** on a leak — an
-//! item past its window still live (retain), an archive the store refused
-//! (archive), an item past retention still stored (purge). Under pressure the
-//! secretary misses a sweep now and then, deterministically, so the leaks it is
-//! meant to catch actually occur.
+//! Two stages, per content class: **retain** and **archive**. Green while every
+//! item is in the bucket its age dictates; **red** on a leak — an item past its
+//! retention window still live (retain), or an archive the store refused
+//! (archive). Under pressure the secretary misses a sweep now and then,
+//! deterministically, so the leaks it is meant to catch actually occur.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -38,29 +37,25 @@ use crate::verdict::Contract;
 /// Seconds in a day — the unit the simulated clock is quantised to for creation.
 const SECONDS_PER_DAY: u64 = 86_400;
 
-/// How long an item is kept before it is archived, and how long it is archived
-/// before it is purged, in **days** of simulated time. A realistic records
-/// lifecycle: live for a quarter, archived for two years, then purged.
+/// How long an item is retained before it is archived, in **days** of simulated
+/// time. A realistic records lifecycle: live for a quarter, then archived.
 const KEEP_DAYS: u64 = 90;
-const ARCHIVE_DAYS: u64 = 730;
 
 /// A ceiling on how many simulated days one tick may create at once, so a large
 /// jump in simulated time cannot burst the working set in a single round.
 const MAX_DAYS_PER_TICK: u64 = 60;
 
-/// The retention windows as a real [`RetentionPolicy`]: keep, then archive, then
-/// delete, by age in days. The one the secretary consults and the verdict checks.
+/// The retention window as a real [`RetentionPolicy`]: keep while young, then
+/// archive. Never delete (ADR-0040). The one the secretary consults and the
+/// verdict checks.
 struct Windows;
 
 impl RetentionPolicy for Windows {
     fn action_for(&self, _data_type: &str, age: Duration) -> RetentionAction {
-        let days = age.as_secs() / SECONDS_PER_DAY;
-        if days < KEEP_DAYS {
+        if age.as_secs() / SECONDS_PER_DAY < KEEP_DAYS {
             RetentionAction::Keep
-        } else if days < KEEP_DAYS + ARCHIVE_DAYS {
-            RetentionAction::Archive
         } else {
-            RetentionAction::Delete
+            RetentionAction::Archive
         }
     }
 }
@@ -105,28 +100,28 @@ struct Item {
     id: u64,
 }
 
-/// A stage of the retention lifecycle.
+/// A stage of the retention lifecycle. Two, and only two — Xmip does not delete
+/// (ADR-0040).
 #[derive(Clone, Copy)]
 enum Sweep {
     Retain,
     Archive,
-    Purge,
 }
 
 impl Sweep {
-    const ALL: [Sweep; 3] = [Sweep::Retain, Sweep::Archive, Sweep::Purge];
+    const ALL: [Sweep; 2] = [Sweep::Retain, Sweep::Archive];
     fn name(self) -> &'static str {
         match self {
             Sweep::Retain => "retain",
             Sweep::Archive => "archive",
-            Sweep::Purge => "purge",
         }
     }
 }
 
 /// The secretary: it creates an item per class each simulated day, ages the lot
-/// against the windows, and sweeps them through keep, archive and purge, driving
-/// the real policy and store.
+/// against the window, and sweeps them from retained to archived, driving the
+/// real policy and store. Archived items accumulate — Xmip hands them off and
+/// never deletes them.
 pub struct Secretary {
     node: String,
     policy: Windows,
@@ -176,7 +171,6 @@ impl Secretary {
         self.create_through(now_secs);
 
         let mut leaks = Leaks::default();
-        self.purge_archived(now_secs, &mut leaks);
         self.sweep_live(now_secs, &mut leaks);
 
         let mut snapshot = Snapshot::new();
@@ -213,26 +207,7 @@ impl Secretary {
         Duration::from_secs(now_secs.saturating_sub(item.created_secs))
     }
 
-    /// Purge archived items whose age says delete — unless a purge is missed.
-    fn purge_archived(&mut self, now_secs: u64, leaks: &mut Leaks) {
-        let mut kept = Vec::new();
-        for item in std::mem::take(&mut self.archived) {
-            let age = Self::age_of(now_secs, &item);
-            if self.policy.action_for(item.contract.name(), age) == RetentionAction::Delete {
-                if self.miss("purge", item.contract) {
-                    leaks.purge.insert(item.contract.name());
-                    kept.push(item);
-                }
-                // else: dropped — purged.
-            } else {
-                kept.push(item);
-            }
-        }
-        self.archived = kept;
-    }
-
-    /// Sweep live items: keep the young, archive the aged, and catch anything
-    /// that slipped past its windows.
+    /// Sweep live items: retain the young, archive the aged. Nothing is deleted.
     fn sweep_live(&mut self, now_secs: u64, leaks: &mut Leaks) {
         let mut kept = Vec::new();
         for item in std::mem::take(&mut self.live) {
@@ -240,15 +215,6 @@ impl Secretary {
             match self.policy.action_for(item.contract.name(), age) {
                 RetentionAction::Keep => kept.push(item),
                 RetentionAction::Archive => self.try_archive(item, leaks, &mut kept),
-                RetentionAction::Delete => {
-                    // It should have been archived already; that it is still live
-                    // is a retain leak. Purge it now unless that is missed too.
-                    leaks.retain.insert(item.contract.name());
-                    if self.miss("purge", item.contract) {
-                        leaks.purge.insert(item.contract.name());
-                        kept.push(item);
-                    }
-                }
             }
         }
         self.live = kept;
@@ -312,7 +278,6 @@ impl Secretary {
                 leaks.archive.contains(name),
                 self.archive_line(contract, leaks),
             ),
-            Sweep::Purge => (leaks.purge.contains(name), purge_line(contract, leaks)),
         };
 
         let mark = if leaked { Mark::Fail } else { Mark::Pass };
@@ -334,9 +299,9 @@ impl Secretary {
 
     fn retain_line(&self, contract: Contract, leaks: &Leaks) -> String {
         if leaks.retain.contains(contract.name()) {
-            "retention leak: an item past its keep window is still live".to_string()
+            "retention leak: an item past its window is still live".to_string()
         } else {
-            format!("{} kept within the window", self.count_live(contract))
+            format!("{} retained within the window", self.count_live(contract))
         }
     }
 
@@ -349,20 +314,11 @@ impl Secretary {
     }
 }
 
-fn purge_line(contract: Contract, leaks: &Leaks) -> String {
-    if leaks.purge.contains(contract.name()) {
-        "purge overdue: an item past its retention is still stored".to_string()
-    } else {
-        "none overdue".to_string()
-    }
-}
-
 /// The leaks found this round, by class token.
 #[derive(Default)]
 struct Leaks {
     retain: std::collections::BTreeSet<&'static str>,
     archive: std::collections::BTreeSet<&'static str>,
-    purge: std::collections::BTreeSet<&'static str>,
 }
 
 #[cfg(test)]
@@ -382,19 +338,23 @@ mod tests {
     }
 
     #[test]
-    fn a_methodical_run_keeps_archives_and_purges_without_a_leak() {
+    fn a_methodical_run_retains_then_archives_without_a_leak() {
         let mut secretary = Secretary::new("xmip:///playground/secretary");
-        // Three simulated years at ten days a tick — long past the purge window.
+        // Three simulated years at ten days a tick — long past the retention window.
         let snapshot = run(&mut secretary, 10, 120);
         assert_eq!(
             snapshot.worst("xmip:///playground/secretary"),
             Some(Health::Green),
             "a clean secretary never leaks"
         );
+        assert!(
+            !secretary.archived.is_empty(),
+            "items past the window are archived, not deleted"
+        );
     }
 
     #[test]
-    fn the_windows_policy_keeps_then_archives_then_deletes() {
+    fn the_windows_policy_keeps_then_archives_and_never_deletes() {
         let policy = Windows;
         let at_days = |days: u64| Duration::from_secs(days * SECONDS_PER_DAY);
         assert_eq!(
@@ -405,35 +365,41 @@ mod tests {
             policy.action_for("json", at_days(KEEP_DAYS)),
             RetentionAction::Archive
         );
+        // Far past the window it is still Archive — there is no Delete to reach.
         assert_eq!(
-            policy.action_for("json", at_days(KEEP_DAYS + ARCHIVE_DAYS)),
-            RetentionAction::Delete
+            policy.action_for("json", at_days(KEEP_DAYS * 100)),
+            RetentionAction::Archive
         );
     }
 
     #[test]
     fn items_age_on_the_simulated_clock_not_the_round_count() {
-        // Many rounds, but simulated time barely moves: nothing ages out of keep,
-        // so nothing is archived. Round count alone would have archived them.
+        // Many rounds, but simulated time barely moves: nothing ages out of the
+        // window, so nothing is archived. Round count alone would have archived them.
         let mut secretary = Secretary::new("xmip:///playground/secretary");
         for _ in 0..50 {
             secretary.tick(Duration::from_secs(SECONDS_PER_DAY)); // one simulated day, held
         }
         assert!(
             secretary.archived.is_empty(),
-            "at one simulated day, nothing has passed the 90-day keep window"
+            "at one simulated day, nothing has passed the 90-day retention window"
         );
     }
 
     #[test]
-    fn the_live_and_archived_sets_stay_bounded() {
+    fn the_live_set_stays_bounded_and_the_archive_only_grows() {
         let mut secretary = Secretary::new("xmip:///playground/secretary");
-        run(&mut secretary, 5, 400);
-        // Live is items younger than KEEP_DAYS; archived is items in the archive
-        // window. Both bounded by the window in days times the classes, regardless
+        run(&mut secretary, 5, 200);
+        let archived_first = secretary.archived.len();
+        // Live is items younger than KEEP_DAYS — bounded by the window regardless
         // of how long it runs.
         assert!(secretary.live.len() as u64 <= (KEEP_DAYS + 1) * CONTRACTS.len() as u64);
-        assert!(secretary.archived.len() as u64 <= (ARCHIVE_DAYS + 1) * CONTRACTS.len() as u64);
+        // The archive only ever grows; Xmip never deletes from it.
+        run(&mut secretary, 5, 100);
+        assert!(
+            secretary.archived.len() >= archived_first,
+            "the archive is never purged"
+        );
     }
 
     #[test]
