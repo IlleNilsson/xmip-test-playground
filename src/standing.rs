@@ -48,9 +48,9 @@ impl Standing {
         let (health, severity) = if self.last_pass && self.failures == 0 {
             (Health::Fine, 0)
         } else if self.last_pass {
-            (Health::Average, 45)
+            (Health::Stressed, 45)
         } else if self.last_warn {
-            (Health::Average, 40)
+            (Health::Stressed, 40)
         } else {
             (Health::Done, 90)
         };
@@ -81,7 +81,7 @@ mod tests {
         let mut standing = Standing::default();
         standing.record(Mark::Fail, "broke");
         standing.record(Mark::Pass, "recovered");
-        assert_eq!(standing.health("s", 1).health, Health::Average);
+        assert_eq!(standing.health("s", 1).health, Health::Stressed);
     }
 
     #[test]
@@ -90,6 +90,6 @@ mod tests {
         standing.record(Mark::Fail, "broke");
         assert_eq!(standing.health("s", 1).health, Health::Done);
         standing.record(Mark::Warn, "one-sided");
-        assert_eq!(standing.health("s", 1).health, Health::Average);
+        assert_eq!(standing.health("s", 1).health, Health::Stressed);
     }
 }

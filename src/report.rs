@@ -182,7 +182,9 @@ const fn state(health: Health) -> &'static str {
     // The mood, not a colour — the surface reading this paints it (ADR-0041).
     match health {
         Health::Fine => "fine",
-        Health::Average => "average",
+        Health::Working => "working",
+        Health::Stressed => "stressed",
+        Health::Exhausted => "exhausted",
         Health::Holding => "holding",
         Health::Done => "done",
     }

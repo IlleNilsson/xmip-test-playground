@@ -235,7 +235,9 @@ fn pairs(node: &str, snapshot: &Snapshot) -> Vec<observe::HealthRecord> {
 fn word(health: Health) -> &'static str {
     match health {
         Health::Fine => "FINE",
-        Health::Average => "AVERAGE",
+        Health::Working => "WORKING",
+        Health::Stressed => "STRESSED",
+        Health::Exhausted => "EXHAUSTED",
         Health::Holding => "HOLDING",
         Health::Done => "DONE",
     }

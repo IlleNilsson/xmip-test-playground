@@ -183,7 +183,7 @@ impl Furious {
         let (health, severity) = if p99 <= budget {
             (Health::Fine, 0)
         } else if p99 <= budget * 2 {
-            (Health::Average, 45)
+            (Health::Stressed, 45)
         } else {
             (Health::Done, 90)
         };
@@ -211,7 +211,7 @@ fn millis(micros: u64) -> String {
 fn yellow(scope: &str, why: String, now: i64) -> HealthRecord {
     HealthRecord {
         scope: scope.to_string(),
-        health: Health::Average,
+        health: Health::Stressed,
         severity: 40,
         evidence: why,
         observed_unix_nanos: now,

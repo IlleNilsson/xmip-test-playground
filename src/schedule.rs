@@ -323,14 +323,14 @@ fn over_time(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
         Some(Outcome::Delivered) => (
             // Passing now, but it has failed before — a yellow that says so,
             // deepening with how often it has failed.
-            Health::Average,
+            Health::Stressed,
             rate_severity(tally),
             format!(
                 "{passed}/{} rounds passed, {} failed",
                 tally.rounds, tally.failures
             ),
         ),
-        Some(Outcome::OneSided(why)) => (Health::Average, 40, why.clone()),
+        Some(Outcome::OneSided(why)) => (Health::Stressed, 40, why.clone()),
         Some(Outcome::Failed(why)) => (
             Health::Done,
             90,
@@ -339,7 +339,7 @@ fn over_time(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
                 tally.failures, tally.rounds
             ),
         ),
-        None => (Health::Average, 40, "not yet run".to_string()),
+        None => (Health::Stressed, 40, "not yet run".to_string()),
     };
 
     HealthRecord {

@@ -191,7 +191,7 @@ impl Verdict {
                 0,
                 format!("{} bytes out and back", self.bytes),
             ),
-            Outcome::OneSided(why) => (Health::Average, 40, why.clone()),
+            Outcome::OneSided(why) => (Health::Stressed, 40, why.clone()),
             Outcome::Failed(why) => (Health::Done, 90, why.clone()),
         };
 
@@ -259,7 +259,7 @@ mod tests {
             observed_unix_nanos: 1,
         };
 
-        assert_eq!(verdict.health("xmip:///p").health, Health::Average);
+        assert_eq!(verdict.health("xmip:///p").health, Health::Stressed);
     }
 
     #[test]
