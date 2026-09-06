@@ -20,8 +20,11 @@
 //! Pass a number to run that many rounds and stop; omit it to roll until
 //! interrupted. Two time limits bound any roll (ADR-0028): a maximum wall-clock
 //! time, `XMIP_PLAYGROUND_MAX_SECONDS`, and a factor on time,
-//! `XMIP_PLAYGROUND_TIME_FACTOR` — `1.0` mimics real time, below one runs
-//! faster, above one slower.
+//! `XMIP_PLAYGROUND_TIME_FACTOR`, which stretches a **simulated clock** — `1.0`
+//! mimics real time, retracted below one runs simulated time faster, so a long
+//! horizon plays out in a short run (three simulated years in fifteen real
+//! minutes is `MAX_SECONDS=900` with `TIME_FACTOR≈9.5e-6`). The round cadence
+//! stays real; the factor stretches simulated time, which the secretary ages on.
 //!
 //! When stdout is a terminal the board is redrawn in place; when it is piped,
 //! one summary line per round is appended. After every tick the snapshot,
@@ -81,7 +84,7 @@ fn main() {
         merge(&mut snapshot, &pingpong.tick());
         merge(&mut snapshot, &furious.tick());
         merge(&mut snapshot, &load.tick());
-        merge(&mut snapshot, &secretary.tick());
+        merge(&mut snapshot, &secretary.tick(budget.simulated_elapsed()));
         merge(&mut snapshot, &claim.tick());
         merge(&mut snapshot, &daily.tick());
 
@@ -105,7 +108,7 @@ fn main() {
         if limit.is_some_and(|limit| round >= limit) || budget.expired() {
             break;
         }
-        std::thread::sleep(budget.interval(real));
+        std::thread::sleep(real);
     }
 
     std::fs::remove_dir_all(&base).ok();

@@ -1,12 +1,19 @@
-//! The secretary scenario: retention and archiving, done methodically over time.
+//! The secretary scenario: retention and archiving, done methodically over a
+//! **simulated clock** so a long records horizon plays out in a short run.
 //!
 //! ADR-0028; ADR-0013 and the observability model own retention. Where pingpong
 //! watches a message cross the wire, the secretary watches it age: an item is
 //! **kept** while it is young, **archived** when it passes its retention window,
-//! and **purged** when it passes its archive window. The scenario drives the
-//! estate's real [`RetentionPolicy`] (keep, archive, delete by age) and real
-//! [`ArchiveStore`] over a logical clock — one round is one second — so the whole
-//! lifecycle runs, not a mock of it.
+//! and **purged** when it passes its archive window. It drives the estate's real
+//! [`RetentionPolicy`] (keep, archive, delete by age) and real [`ArchiveStore`].
+//!
+//! Time is simulated. Each `tick` is handed how much simulated time has elapsed
+//! (the roll's `Budget` factor, ADR-0028: factor 1.0 is real time, retracted it
+//! runs faster), so fifteen real minutes can carry three simulated years. Items
+//! are created at a steady **one per content class per simulated day**, and aged
+//! against realistic windows — kept 90 days, archived two years, then purged —
+//! so an operator watches records born, cross into the archive, and fall out of
+//! it, rather than a toy churn.
 //!
 //! Three stages, per content class: **retain**, **archive**, **purge**. Green
 //! while every item is in the bucket its age dictates; **red** on a leak — an
@@ -28,22 +35,29 @@ use crate::standing::{Mark, Standing};
 use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
+/// Seconds in a day — the unit the simulated clock is quantised to for creation.
+const SECONDS_PER_DAY: u64 = 86_400;
+
 /// How long an item is kept before it is archived, and how long it is archived
-/// before it is purged, in rounds. Small, so the lifecycle turns over quickly and
-/// the live and archived sets stay tiny.
-const KEEP_ROUNDS: u64 = 3;
-const ARCHIVE_ROUNDS: u64 = 3;
+/// before it is purged, in **days** of simulated time. A realistic records
+/// lifecycle: live for a quarter, archived for two years, then purged.
+const KEEP_DAYS: u64 = 90;
+const ARCHIVE_DAYS: u64 = 730;
+
+/// A ceiling on how many simulated days one tick may create at once, so a large
+/// jump in simulated time cannot burst the working set in a single round.
+const MAX_DAYS_PER_TICK: u64 = 60;
 
 /// The retention windows as a real [`RetentionPolicy`]: keep, then archive, then
-/// delete, by age. The one the secretary consults and the verdict checks against.
+/// delete, by age in days. The one the secretary consults and the verdict checks.
 struct Windows;
 
 impl RetentionPolicy for Windows {
     fn action_for(&self, _data_type: &str, age: Duration) -> RetentionAction {
-        let seconds = age.as_secs();
-        if seconds < KEEP_ROUNDS {
+        let days = age.as_secs() / SECONDS_PER_DAY;
+        if days < KEEP_DAYS {
             RetentionAction::Keep
-        } else if seconds < KEEP_ROUNDS + ARCHIVE_ROUNDS {
+        } else if days < KEEP_DAYS + ARCHIVE_DAYS {
             RetentionAction::Archive
         } else {
             RetentionAction::Delete
@@ -83,10 +97,11 @@ impl ArchiveStore for MemoryArchive {
     }
 }
 
-/// One item the secretary is looking after.
+/// One item the secretary is looking after, stamped with the simulated second it
+/// was created so its age is simulated, not real.
 struct Item {
     contract: Contract,
-    created: u64,
+    created_secs: u64,
     id: u64,
 }
 
@@ -109,8 +124,9 @@ impl Sweep {
     }
 }
 
-/// The secretary: it creates an item per class each round, ages the lot, and
-/// sweeps them through keep, archive and purge, driving the real policy and store.
+/// The secretary: it creates an item per class each simulated day, ages the lot
+/// against the windows, and sweeps them through keep, archive and purge, driving
+/// the real policy and store.
 pub struct Secretary {
     node: String,
     policy: Windows,
@@ -118,6 +134,7 @@ pub struct Secretary {
     live: Vec<Item>,
     archived: Vec<Item>,
     round: u64,
+    emitted_days: u64,
     next_id: u64,
     under_pressure: bool,
     standings: BTreeMap<String, Standing>,
@@ -134,6 +151,7 @@ impl Secretary {
             live: Vec::new(),
             archived: Vec::new(),
             round: 0,
+            emitted_days: 0,
             next_id: 0,
             under_pressure: false,
             standings: BTreeMap::new(),
@@ -147,24 +165,19 @@ impl Secretary {
         self
     }
 
-    /// One round: create an item per class, age everything, sweep it, and
-    /// publish a verdict per (stage, class).
-    pub fn tick(&mut self) -> Snapshot {
+    /// One round at simulated time `simulated`: create an item per class for each
+    /// simulated day newly reached, age everything, sweep it, and publish a
+    /// verdict per (stage, class).
+    pub fn tick(&mut self, simulated: Duration) -> Snapshot {
         self.round += 1;
         let now = now_unix_nanos();
+        let now_secs = simulated.as_secs();
 
-        for &contract in &CONTRACTS {
-            self.live.push(Item {
-                contract,
-                created: self.round,
-                id: self.next_id,
-            });
-            self.next_id += 1;
-        }
+        self.create_through(now_secs);
 
         let mut leaks = Leaks::default();
-        self.purge_archived(&mut leaks);
-        self.sweep_live(&mut leaks);
+        self.purge_archived(now_secs, &mut leaks);
+        self.sweep_live(now_secs, &mut leaks);
 
         let mut snapshot = Snapshot::new();
         for sweep in Sweep::ALL {
@@ -177,12 +190,34 @@ impl Secretary {
         snapshot
     }
 
+    /// Create one item per class for every simulated day newly reached, bounded
+    /// so a large jump cannot burst the working set in one round.
+    fn create_through(&mut self, now_secs: u64) {
+        let today = now_secs / SECONDS_PER_DAY;
+        let target = today.min(self.emitted_days + MAX_DAYS_PER_TICK);
+        while self.emitted_days < target {
+            self.emitted_days += 1;
+            let created_secs = self.emitted_days * SECONDS_PER_DAY;
+            for &contract in &CONTRACTS {
+                self.live.push(Item {
+                    contract,
+                    created_secs,
+                    id: self.next_id,
+                });
+                self.next_id += 1;
+            }
+        }
+    }
+
+    fn age_of(now_secs: u64, item: &Item) -> Duration {
+        Duration::from_secs(now_secs.saturating_sub(item.created_secs))
+    }
+
     /// Purge archived items whose age says delete — unless a purge is missed.
-    fn purge_archived(&mut self, leaks: &mut Leaks) {
-        let round = self.round;
+    fn purge_archived(&mut self, now_secs: u64, leaks: &mut Leaks) {
         let mut kept = Vec::new();
         for item in std::mem::take(&mut self.archived) {
-            let age = Duration::from_secs(round - item.created);
+            let age = Self::age_of(now_secs, &item);
             if self.policy.action_for(item.contract.name(), age) == RetentionAction::Delete {
                 if self.miss("purge", item.contract) {
                     leaks.purge.insert(item.contract.name());
@@ -198,11 +233,10 @@ impl Secretary {
 
     /// Sweep live items: keep the young, archive the aged, and catch anything
     /// that slipped past its windows.
-    fn sweep_live(&mut self, leaks: &mut Leaks) {
-        let round = self.round;
+    fn sweep_live(&mut self, now_secs: u64, leaks: &mut Leaks) {
         let mut kept = Vec::new();
         for item in std::mem::take(&mut self.live) {
-            let age = Duration::from_secs(round - item.created);
+            let age = Self::age_of(now_secs, &item);
             match self.policy.action_for(item.contract.name(), age) {
                 RetentionAction::Keep => kept.push(item),
                 RetentionAction::Archive => self.try_archive(item, leaks, &mut kept),
@@ -336,13 +370,22 @@ mod tests {
     use super::*;
     use observe::Health;
 
+    /// Drive the secretary across `ticks` rounds, advancing simulated time by
+    /// `days_per_tick` each round.
+    fn run(secretary: &mut Secretary, days_per_tick: u64, ticks: u64) -> Snapshot {
+        let mut snapshot = Snapshot::new();
+        for round in 1..=ticks {
+            let simulated = Duration::from_secs(round * days_per_tick * SECONDS_PER_DAY);
+            snapshot = secretary.tick(simulated);
+        }
+        snapshot
+    }
+
     #[test]
     fn a_methodical_run_keeps_archives_and_purges_without_a_leak() {
         let mut secretary = Secretary::new("xmip:///playground/secretary");
-        let mut snapshot = secretary.tick();
-        for _ in 0..40 {
-            snapshot = secretary.tick();
-        }
+        // Three simulated years at ten days a tick — long past the purge window.
+        let snapshot = run(&mut secretary, 10, 120);
         assert_eq!(
             snapshot.worst("xmip:///playground/secretary"),
             Some(Health::Green),
@@ -351,51 +394,61 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_policy_keeps_then_archives_then_deletes() {
+        let policy = Windows;
+        let at_days = |days: u64| Duration::from_secs(days * SECONDS_PER_DAY);
+        assert_eq!(
+            policy.action_for("json", Duration::ZERO),
+            RetentionAction::Keep
+        );
+        assert_eq!(
+            policy.action_for("json", at_days(KEEP_DAYS)),
+            RetentionAction::Archive
+        );
+        assert_eq!(
+            policy.action_for("json", at_days(KEEP_DAYS + ARCHIVE_DAYS)),
+            RetentionAction::Delete
+        );
+    }
+
+    #[test]
+    fn items_age_on_the_simulated_clock_not_the_round_count() {
+        // Many rounds, but simulated time barely moves: nothing ages out of keep,
+        // so nothing is archived. Round count alone would have archived them.
+        let mut secretary = Secretary::new("xmip:///playground/secretary");
+        for _ in 0..50 {
+            secretary.tick(Duration::from_secs(SECONDS_PER_DAY)); // one simulated day, held
+        }
+        assert!(
+            secretary.archived.is_empty(),
+            "at one simulated day, nothing has passed the 90-day keep window"
+        );
+    }
+
+    #[test]
     fn the_live_and_archived_sets_stay_bounded() {
         let mut secretary = Secretary::new("xmip:///playground/secretary");
-        for _ in 0..200 {
-            secretary.tick();
-        }
-        // Keep window is KEEP_ROUNDS ages (0..KEEP) per class, archived is
-        // ARCHIVE_ROUNDS ages per class. Bounded regardless of how long it runs.
-        assert!(
-            u64::try_from(secretary.live.len()).expect("len fits u64")
-                <= (KEEP_ROUNDS + 1) * CONTRACTS.len() as u64
-        );
-        assert!(
-            u64::try_from(secretary.archived.len()).expect("len fits u64")
-                <= (ARCHIVE_ROUNDS + 1) * CONTRACTS.len() as u64
-        );
+        run(&mut secretary, 5, 400);
+        // Live is items younger than KEEP_DAYS; archived is items in the archive
+        // window. Both bounded by the window in days times the classes, regardless
+        // of how long it runs.
+        assert!(secretary.live.len() as u64 <= (KEEP_DAYS + 1) * CONTRACTS.len() as u64);
+        assert!(secretary.archived.len() as u64 <= (ARCHIVE_DAYS + 1) * CONTRACTS.len() as u64);
     }
 
     #[test]
     fn under_pressure_a_leak_surfaces() {
         let mut secretary = Secretary::new("xmip:///playground/secretary").under_pressure();
-        let mut snapshot = secretary.tick();
-        for _ in 0..120 {
-            snapshot = secretary.tick();
+        // A leak is red on the round it happens and fades to yellow after, so the
+        // proof is that some round went red, not the state of the last one.
+        let mut ever_red = false;
+        for round in 1..=130 {
+            let simulated = Duration::from_secs(round * 10 * SECONDS_PER_DAY);
+            let snapshot = secretary.tick(simulated);
+            if snapshot.worst("xmip:///playground/secretary") == Some(Health::Red) {
+                ever_red = true;
+            }
         }
-        assert_eq!(
-            snapshot.worst("xmip:///playground/secretary"),
-            Some(Health::Red),
-            "missed sweeps must surface as a leak"
-        );
-    }
-
-    #[test]
-    fn the_windows_policy_keeps_then_archives_then_deletes() {
-        let policy = Windows;
-        assert_eq!(
-            policy.action_for("json", Duration::from_secs(0)),
-            RetentionAction::Keep
-        );
-        assert_eq!(
-            policy.action_for("json", Duration::from_secs(KEEP_ROUNDS)),
-            RetentionAction::Archive
-        );
-        assert_eq!(
-            policy.action_for("json", Duration::from_secs(KEEP_ROUNDS + ARCHIVE_ROUNDS)),
-            RetentionAction::Delete
-        );
+        assert!(ever_red, "missed sweeps must surface as a leak");
     }
 }
