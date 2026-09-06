@@ -42,6 +42,7 @@
 
 pub mod claim;
 pub mod contracts;
+pub mod daily;
 pub mod fault;
 pub mod furious;
 pub mod identity;
@@ -56,6 +57,7 @@ pub mod verdict;
 
 pub use claim::Claim;
 pub use contracts::{ContentContract, Shape};
+pub use daily::Daily;
 pub use fault::{Fault, FaultKind, FaultPlan};
 pub use furious::Furious;
 pub use identity::{IdentityFaults, Step};
