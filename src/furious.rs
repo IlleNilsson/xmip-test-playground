@@ -260,7 +260,8 @@ mod tests {
         assert_eq!(
             snapshot.worst("xmip:///playground/furious"),
             Some(Health::Holding),
-            "injected spikes should drive p99 past a budget — a Done rolls up to Holding (ADR-0041)"
+            "injected spikes should drive p99 past a budget — a Done rolls up to Holding \
+             (ADR-0041)"
         );
         // file never spikes: it stays green.
         assert_eq!(

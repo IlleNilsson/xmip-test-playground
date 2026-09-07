@@ -66,6 +66,11 @@ archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson
 # playground. One repository per contract type (ADR-0010).
 contract_json_schema = { package = "xmip-core-contract-json-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-json-schema", branch = "main" }
 contract_xml_schema = { package = "xmip-core-contract-xml-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-xml-schema", branch = "main" }
+contract_csv = { package = "xmip-core-contract-csv", git = "https://github.com/IlleNilsson/xmip-core-contract-csv", branch = "main" }
+contract_fixed_width = { package = "xmip-core-contract-fixed-width", git = "https://github.com/IlleNilsson/xmip-core-contract-fixed-width", branch = "main" }
+contract_edi_edifact = { package = "xmip-core-contract-edi-edifact", git = "https://github.com/IlleNilsson/xmip-core-contract-edi-edifact", branch = "main" }
+contract_regex = { package = "xmip-core-contract-regex", git = "https://github.com/IlleNilsson/xmip-core-contract-regex", branch = "main" }
+contract_schematron = { package = "xmip-core-contract-schematron", git = "https://github.com/IlleNilsson/xmip-core-contract-schematron", branch = "main" }
 
 # The snapshot and history files are written in TOML: on disk is TOML across the
 # estate, JSON is reserved for memory and the wire (the owner's rule). serde

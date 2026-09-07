@@ -281,7 +281,46 @@ fn large_payload(contract: Contract, target: usize) -> Vec<u8> {
             "",
             target,
         ),
+        Contract::Csv => lines_to("id,customer,total", "A1,\"ACME, Inc\",15.00", target),
+        Contract::FixedWidth => lines_to("A00001ACME      02", "A00002BOLT      01", target),
+        Contract::Edifact => large_edifact(target),
+        Contract::Regex => repeat_to("PROBE-4711 heavy ", target).into_bytes(),
+        Contract::Schematron => wrap_to(
+            "<probe xmlns=\"urn:xmip:probe\">",
+            "<n>1</n>",
+            "</probe>",
+            target,
+        ),
     }
+}
+
+/// `first` then `unit` lines to `target`, CRLF between and none at the end, so
+/// the payload survives a line-carrying transport byte for byte.
+fn lines_to(first: &str, unit: &str, target: usize) -> Vec<u8> {
+    let mut out = String::from(first);
+    while out.len() < target {
+        out.push_str("\r\n");
+        out.push_str(unit);
+    }
+    out.into_bytes()
+}
+
+/// One message padded with `FTX` segments to `target`, its `UNT` count kept
+/// true so the interchange stays sound at any size.
+fn large_edifact(target: usize) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut body = String::from(
+        "UNA:+.? 'UNB+UNOC:3+SENDER+RECEIVER+260907:1345+REF001'\
+         UNH+1+ORDERS:D:96A:UN'BGM+220+PO4711'",
+    );
+    let mut segments = 2; // UNH and BGM
+    while body.len() < target {
+        body.push_str("FTX+AAI+++heavy'");
+        segments += 1;
+    }
+    segments += 1; // UNT itself
+    let _ = write!(body, "UNT+{segments}+1'UNZ+1+REF001'");
+    body.into_bytes()
 }
 
 fn repeat_to(unit: &str, target: usize) -> String {

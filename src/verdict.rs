@@ -31,7 +31,22 @@ pub enum Contract {
     Xml,
     /// HTML markup.
     Html,
+    /// CSV rows, the `csv` contract technology.
+    Csv,
+    /// Fixed-width records, the `fixed-width` contract technology.
+    FixedWidth,
+    /// A UN/EDIFACT interchange, the `edi-edifact` contract technology.
+    Edifact,
+    /// Text held by a pattern, the `regex` contract technology.
+    Regex,
+    /// XML held by rules, the `schematron` contract technology.
+    Schematron,
 }
+
+/// One sound ORDERS interchange, D96A: the EDIFACT probe.
+pub const EDIFACT_PROBE: &[u8] = b"UNA:+.? 'UNB+UNOC:3+SENDER+RECEIVER+260907:1345+REF001'\
+UNH+1+ORDERS:D:96A:UN'BGM+220+PO4711'DTM+137:20260907:102'LIN+1++X001:SA'QTY+21:2'\
+UNT+6+1'UNZ+1+REF001'";
 
 impl Contract {
     /// The token as it appears in a scope and a repository name.
@@ -43,6 +58,11 @@ impl Contract {
             Contract::Json => "json",
             Contract::Xml => "xml",
             Contract::Html => "html",
+            Contract::Csv => "csv",
+            Contract::FixedWidth => "fixed-width",
+            Contract::Edifact => "edi-edifact",
+            Contract::Regex => "regex",
+            Contract::Schematron => "schematron",
         }
     }
 
@@ -55,6 +75,11 @@ impl Contract {
             Contract::Json => Shape::Json,
             Contract::Xml => Shape::Xml,
             Contract::Html => Shape::Html,
+            Contract::Csv => Shape::Csv,
+            Contract::FixedWidth => Shape::FixedWidth,
+            Contract::Edifact => Shape::Edifact,
+            Contract::Regex => Shape::Regex,
+            Contract::Schematron => Shape::Schematron,
         }
     }
 
@@ -68,6 +93,13 @@ impl Contract {
             Contract::Json => br#"{"probe":"ping-pong","n":1}"#.to_vec(),
             Contract::Xml => b"<probe><n>1</n>ping-pong</probe>".to_vec(),
             Contract::Html => b"<!doctype html><title>xmip</title><p>ping-pong".to_vec(),
+            // CRLF and no trailing break: mail carries lines, and a bare LF or
+            // a final newline would not survive SMTP byte for byte.
+            Contract::Csv => b"probe,n\r\n\"ping,pong\",1".to_vec(),
+            Contract::FixedWidth => b"A00001ACME      02\r\nA00002BOLT      01".to_vec(),
+            Contract::Edifact => EDIFACT_PROBE.to_vec(),
+            Contract::Regex => b"PROBE-4711 ping-pong".to_vec(),
+            Contract::Schematron => b"<probe xmlns=\"urn:xmip:probe\"><n>1</n></probe>".to_vec(),
         }
     }
 

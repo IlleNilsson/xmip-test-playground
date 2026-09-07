@@ -16,7 +16,12 @@
 use contract::{
     Contract, ContractDescriptor, ContractError, ContractId, ValidationIssue, ValidationResult,
 };
+use contract_csv::Csv;
+use contract_edi_edifact::Edifact;
+use contract_fixed_width::FixedWidth;
 use contract_json_schema::JsonSchema;
+use contract_regex::RegexContract;
+use contract_schematron::Schematron;
 use contract_xml_schema::XmlSchema;
 use stream::Stream;
 
@@ -33,6 +38,16 @@ pub enum Shape {
     Xml,
     /// Carries HTML markup.
     Html,
+    /// Rows with a consistent field count and CSV quoting.
+    Csv,
+    /// Text records; a bound copybook would lay them out.
+    FixedWidth,
+    /// A sound UN/EDIFACT interchange.
+    Edifact,
+    /// Text; a bound pattern would hold it.
+    Regex,
+    /// Well-formed XML; bound rules would hold it.
+    Schematron,
 }
 
 impl Shape {
@@ -41,10 +56,12 @@ impl Shape {
     pub const fn representation(self) -> &'static str {
         match self {
             Shape::Bytes => "application/octet-stream",
-            Shape::Text => "text/plain",
+            Shape::Text | Shape::FixedWidth | Shape::Regex => "text/plain",
             Shape::Json => "application/json",
-            Shape::Xml => "application/xml",
+            Shape::Xml | Shape::Schematron => "application/xml",
             Shape::Html => "text/html",
+            Shape::Csv => "text/csv",
+            Shape::Edifact => "application/EDIFACT",
         }
     }
 }
@@ -86,6 +103,11 @@ impl Contract for ContentContract {
         match self.shape {
             Shape::Json => return JsonSchema::new().validate(stream),
             Shape::Xml => return XmlSchema::new().validate(stream),
+            Shape::Csv => return Csv::new().validate(stream),
+            Shape::FixedWidth => return FixedWidth::new().validate(stream),
+            Shape::Edifact => return Edifact::new().validate(stream),
+            Shape::Regex => return RegexContract::new().validate(stream),
+            Shape::Schematron => return Schematron::new().validate(stream),
             Shape::Bytes | Shape::Text | Shape::Html => {}
         }
         let issues = check(self.shape, stream.bytes());
@@ -105,11 +127,18 @@ fn issue(message: impl Into<String>) -> ValidationIssue {
     }
 }
 
-/// The one structural check per local shape. Empty means it held. JSON and XML
-/// never reach here: `validate` hands them to their contract technologies.
+/// The one structural check per local shape. Empty means it held. Every shape
+/// with a contract technology never reaches here: `validate` hands it over.
 fn check(shape: Shape, bytes: &[u8]) -> Vec<ValidationIssue> {
     match shape {
-        Shape::Bytes | Shape::Json | Shape::Xml => Vec::new(),
+        Shape::Bytes
+        | Shape::Json
+        | Shape::Xml
+        | Shape::Csv
+        | Shape::FixedWidth
+        | Shape::Edifact
+        | Shape::Regex
+        | Shape::Schematron => Vec::new(),
         Shape::Text => match std::str::from_utf8(bytes) {
             Ok(_) => Vec::new(),
             Err(error) => vec![issue(format!("not valid UTF-8: {error}"))],

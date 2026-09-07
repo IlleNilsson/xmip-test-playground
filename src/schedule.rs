@@ -43,14 +43,20 @@ impl Tally {
     }
 }
 
-/// Every contract the playground exercises today. Grows as the content modules
-/// land; ADR-0028's matrix is every transport by every one of these.
-pub const CONTRACTS: [Contract; 5] = [
+/// Every contract the playground exercises today: the three local shapes and
+/// every contract technology the estate has landed. ADR-0028's matrix is every
+/// transport by every one of these.
+pub const CONTRACTS: [Contract; 10] = [
     Contract::Bytes,
     Contract::Text,
     Contract::Json,
     Contract::Xml,
     Contract::Html,
+    Contract::Csv,
+    Contract::FixedWidth,
+    Contract::Edifact,
+    Contract::Regex,
+    Contract::Schematron,
 ];
 
 /// A scheduled exercise of the estate's transports over the message path. Holds
