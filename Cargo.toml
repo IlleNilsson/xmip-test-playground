@@ -28,6 +28,15 @@ path = "src/lib.rs"
 observe = { package = "xmip-core-observe", git = "https://github.com/IlleNilsson/xmip-core-observe", branch = "main" }
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
 
+# One technology repository per protocol (ADR-0010), each mounted under the
+# transport capability. The pingpong adapters drive these.
+transport_file = { package = "xmip-core-transport-file", git = "https://github.com/IlleNilsson/xmip-core-transport-file", branch = "main" }
+transport_tcp = { package = "xmip-core-transport-tcp", git = "https://github.com/IlleNilsson/xmip-core-transport-tcp", branch = "main" }
+transport_udp = { package = "xmip-core-transport-udp", git = "https://github.com/IlleNilsson/xmip-core-transport-udp", branch = "main" }
+transport_http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNilsson/xmip-core-transport-http", branch = "main" }
+transport_smtp = { package = "xmip-core-transport-smtp", git = "https://github.com/IlleNilsson/xmip-core-transport-smtp", branch = "main" }
+transport_websocket = { package = "xmip-core-transport-websocket", git = "https://github.com/IlleNilsson/xmip-core-transport-websocket", branch = "main" }
+
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
 # contract held. stream carries the immutable content, core the StreamId,

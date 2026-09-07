@@ -15,10 +15,13 @@
 
 use std::time::Duration;
 
-use transport::{
-    FileTransport, HttpTransport, SmtpTransport, TcpTransport, Transport, UdpTransport,
-    WebSocketTransport,
-};
+use transport::Transport;
+use transport_file::FileTransport;
+use transport_http::HttpTransport;
+use transport_smtp::SmtpTransport;
+use transport_tcp::TcpTransport;
+use transport_udp::UdpTransport;
+use transport_websocket::WebSocketTransport;
 
 /// What one round returned.
 pub enum Exchange {
