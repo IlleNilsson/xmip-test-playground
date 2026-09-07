@@ -8,15 +8,16 @@
 //! a real parser; XML on a small well-formedness scan; text and html on lighter
 //! structural claims; bytes makes no claim at all.
 //!
-//! These live in the playground until the estate's own `xmip-core-message-*` and
-//! `xmip-core-contract-*` modules land, at which point the probe validates
-//! against those instead — the shape here is deliberately the estate's Contract
-//! trait so that swap is a move, not a rewrite.
+//! JSON and XML validate through the estate's own contract technologies,
+//! `xmip-core-contract-json-schema` and `xmip-core-contract-xml-schema`, since
+//! 2026-09-07 — the swap the shape here was kept for. Text, html and bytes stay
+//! local: no contract technology claims them.
 
 use contract::{
     Contract, ContractDescriptor, ContractError, ContractId, ValidationIssue, ValidationResult,
 };
-use serde_json::Value;
+use contract_json_schema::JsonSchema;
+use contract_xml_schema::XmlSchema;
 use stream::Stream;
 
 /// The content shape a contract holds a Stream to.
@@ -82,6 +83,11 @@ impl Contract for ContentContract {
     }
 
     fn validate(&self, stream: &Stream) -> Result<ValidationResult, ContractError> {
+        match self.shape {
+            Shape::Json => return JsonSchema::new().validate(stream),
+            Shape::Xml => return XmlSchema::new().validate(stream),
+            Shape::Bytes | Shape::Text | Shape::Html => {}
+        }
         let issues = check(self.shape, stream.bytes());
 
         Ok(ValidationResult {
@@ -99,64 +105,16 @@ fn issue(message: impl Into<String>) -> ValidationIssue {
     }
 }
 
-/// The one structural check per shape. Empty means it held.
+/// The one structural check per local shape. Empty means it held. JSON and XML
+/// never reach here: `validate` hands them to their contract technologies.
 fn check(shape: Shape, bytes: &[u8]) -> Vec<ValidationIssue> {
     match shape {
-        Shape::Bytes => Vec::new(),
+        Shape::Bytes | Shape::Json | Shape::Xml => Vec::new(),
         Shape::Text => match std::str::from_utf8(bytes) {
             Ok(_) => Vec::new(),
             Err(error) => vec![issue(format!("not valid UTF-8: {error}"))],
         },
-        Shape::Json => match serde_json::from_slice::<Value>(bytes) {
-            Ok(_) => Vec::new(),
-            Err(error) => vec![issue(format!("not valid JSON: {error}"))],
-        },
-        Shape::Xml => well_formed_xml(bytes),
         Shape::Html => has_markup(bytes),
-    }
-}
-
-/// A small well-formedness scan: tags open and close in order, self-closing and
-/// declarations aside. Not a schema — the difference ADR-0010 draws between a
-/// representation being well-formed and a contract being satisfied.
-fn well_formed_xml(bytes: &[u8]) -> Vec<ValidationIssue> {
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) => return vec![issue(format!("not valid UTF-8: {error}"))],
-    };
-
-    let mut open: Vec<&str> = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find('<') {
-        rest = &rest[start + 1..];
-        let Some(end) = rest.find('>') else {
-            return vec![issue("a '<' with no matching '>'")];
-        };
-        let tag = rest[..end].trim();
-        rest = &rest[end + 1..];
-
-        if tag.starts_with('?') || tag.starts_with('!') {
-            // A declaration, doctype or comment — not an element, so skip it.
-        } else if let Some(name) = tag.strip_prefix('/') {
-            match open.pop() {
-                Some(opened) if opened == name.trim() => {}
-                Some(opened) => {
-                    return vec![issue(format!("</{}> closes <{opened}>", name.trim()))];
-                }
-                None => return vec![issue(format!("</{}> with nothing open", name.trim()))],
-            }
-        } else if !tag.ends_with('/') {
-            let name = tag.split_whitespace().next().unwrap_or("");
-            if name.is_empty() {
-                return vec![issue("an empty tag")];
-            }
-            open.push(name);
-        }
-    }
-
-    match open.last() {
-        Some(opened) => vec![issue(format!("<{opened}> was never closed"))],
-        None => Vec::new(),
     }
 }
 

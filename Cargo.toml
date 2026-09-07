@@ -61,11 +61,11 @@ context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson
 retain = { package = "xmip-core-retain", git = "https://github.com/IlleNilsson/xmip-core-retain", branch = "main" }
 archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main" }
 
-# The one real parser the content contracts lean on. JSON well-formedness is a
-# genuine check, not a byte comparison, which is the point of exercising a
-# contract rather than a transport — JSON as content, which is exactly the case
-# the estate keeps for it.
-serde_json = "1"
+# The content technologies the probes validate through, so a pair is delivered
+# only if the estate's own contract held — not a stand-in parser in the
+# playground. One repository per contract type (ADR-0010).
+contract_json_schema = { package = "xmip-core-contract-json-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-json-schema", branch = "main" }
+contract_xml_schema = { package = "xmip-core-contract-xml-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-xml-schema", branch = "main" }
 
 # The snapshot and history files are written in TOML: on disk is TOML across the
 # estate, JSON is reserved for memory and the wire (the owner's rule). serde
