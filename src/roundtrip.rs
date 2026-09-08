@@ -60,6 +60,10 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
         Box::new(UdpRoundTrip::new()),
         Box::new(WebSocketRoundTrip::new()),
         Box::new(MllpRoundTrip::new()),
+        Box::new(crate::industrial::ModbusRoundTrip::new()),
+        Box::new(crate::industrial::BacnetRoundTrip::new()),
+        Box::new(crate::industrial::SerialRoundTrip),
+        Box::new(crate::industrial::CanRoundTrip),
     ]
 }
 
@@ -71,7 +75,12 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
 /// judged rather than waited on forever. Found 2026-09-08 when the matrix grew
 /// to twelve contracts over seven transports and one round out of thousands
 /// blocked a whole `cargo test` in `accept`.
-fn listen_exchange<A, S>(listener: TcpListener, address: &str, accept: A, send: S) -> Exchange
+pub(crate) fn listen_exchange<A, S>(
+    listener: TcpListener,
+    address: &str,
+    accept: A,
+    send: S,
+) -> Exchange
 where
     A: FnOnce(&TcpListener) -> transport::Result<transport::Arrived> + Send + 'static,
     S: FnOnce(&str) -> transport::Result<()>,

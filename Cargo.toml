@@ -37,6 +37,10 @@ transport_http = { package = "xmip-core-transport-http", git = "https://github.c
 transport_smtp = { package = "xmip-core-transport-smtp", git = "https://github.com/IlleNilsson/xmip-core-transport-smtp", branch = "main" }
 transport_websocket = { package = "xmip-core-transport-websocket", git = "https://github.com/IlleNilsson/xmip-core-transport-websocket", branch = "main" }
 transport_mllp = { package = "xmip-core-transport-mllp", git = "https://github.com/IlleNilsson/xmip-core-transport-mllp", branch = "main" }
+transport_modbus = { package = "xmip-core-transport-modbus", git = "https://github.com/IlleNilsson/xmip-core-transport-modbus", branch = "main" }
+transport_bacnet = { package = "xmip-core-transport-bacnet", git = "https://github.com/IlleNilsson/xmip-core-transport-bacnet", branch = "main" }
+transport_serial = { package = "xmip-core-transport-serial", git = "https://github.com/IlleNilsson/xmip-core-transport-serial", branch = "main", default-features = false }
+transport_can_bus = { package = "xmip-core-transport-can-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-can-bus", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the

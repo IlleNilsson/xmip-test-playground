@@ -51,6 +51,7 @@ pub mod daily;
 pub mod fault;
 pub mod furious;
 pub mod identity;
+pub mod industrial;
 pub mod load;
 pub mod pingpong;
 pub mod report;

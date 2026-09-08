@@ -439,7 +439,8 @@ mod tests {
         let mut schedule = Schedule::new("xmip:///playground", &dir);
 
         let snapshot = schedule.tick();
-        let pairs = (CONTRACTS.len() * 7) as u64; // seven transports
+        let transports = all_transports(&dir).len();
+        let pairs = (CONTRACTS.len() * transports) as u64;
 
         assert_eq!(
             snapshot
