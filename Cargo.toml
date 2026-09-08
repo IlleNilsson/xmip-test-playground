@@ -36,6 +36,7 @@ transport_udp = { package = "xmip-core-transport-udp", git = "https://github.com
 transport_http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNilsson/xmip-core-transport-http", branch = "main" }
 transport_smtp = { package = "xmip-core-transport-smtp", git = "https://github.com/IlleNilsson/xmip-core-transport-smtp", branch = "main" }
 transport_websocket = { package = "xmip-core-transport-websocket", git = "https://github.com/IlleNilsson/xmip-core-transport-websocket", branch = "main" }
+transport_mllp = { package = "xmip-core-transport-mllp", git = "https://github.com/IlleNilsson/xmip-core-transport-mllp", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
@@ -71,6 +72,8 @@ contract_fixed_width = { package = "xmip-core-contract-fixed-width", git = "http
 contract_edi_edifact = { package = "xmip-core-contract-edi-edifact", git = "https://github.com/IlleNilsson/xmip-core-contract-edi-edifact", branch = "main" }
 contract_regex = { package = "xmip-core-contract-regex", git = "https://github.com/IlleNilsson/xmip-core-contract-regex", branch = "main" }
 contract_schematron = { package = "xmip-core-contract-schematron", git = "https://github.com/IlleNilsson/xmip-core-contract-schematron", branch = "main" }
+contract_hl7_v2 = { package = "xmip-core-contract-hl7-v2", git = "https://github.com/IlleNilsson/xmip-core-contract-hl7-v2", branch = "main" }
+contract_fhir = { package = "xmip-core-contract-fhir", git = "https://github.com/IlleNilsson/xmip-core-contract-fhir", branch = "main" }
 
 # The snapshot and history files are written in TOML: on disk is TOML across the
 # estate, JSON is reserved for memory and the wire (the owner's rule). serde

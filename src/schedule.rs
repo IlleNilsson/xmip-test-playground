@@ -46,7 +46,7 @@ impl Tally {
 /// Every contract the playground exercises today: the three local shapes and
 /// every contract technology the estate has landed. ADR-0028's matrix is every
 /// transport by every one of these.
-pub const CONTRACTS: [Contract; 10] = [
+pub const CONTRACTS: [Contract; 12] = [
     Contract::Bytes,
     Contract::Text,
     Contract::Json,
@@ -57,6 +57,8 @@ pub const CONTRACTS: [Contract; 10] = [
     Contract::Edifact,
     Contract::Regex,
     Contract::Schematron,
+    Contract::Hl7v2,
+    Contract::Fhir,
 ];
 
 /// A scheduled exercise of the estate's transports over the message path. Holds
@@ -437,7 +439,7 @@ mod tests {
         let mut schedule = Schedule::new("xmip:///playground", &dir);
 
         let snapshot = schedule.tick();
-        let pairs = (CONTRACTS.len() * 6) as u64; // six transports
+        let pairs = (CONTRACTS.len() * 7) as u64; // seven transports
 
         assert_eq!(
             snapshot

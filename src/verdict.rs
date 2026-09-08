@@ -41,7 +41,20 @@ pub enum Contract {
     Regex,
     /// XML held by rules, the `schematron` contract technology.
     Schematron,
+    /// An HL7 v2 message, the `hl7-v2` contract technology.
+    Hl7v2,
+    /// A FHIR resource, the `fhir` contract technology.
+    Fhir,
 }
+
+/// One ADT^A01 admission, HL7 v2.5: carriage returns between segments, as HL7
+/// writes them, and none at the end. A bare CR is not a line ending to mail, so
+/// SMTP returns it byte for byte.
+pub const HL7_PROBE: &[u8] = concat!(
+    "MSH|^~\\&|LAB|HOSP|EMR|CLINIC|20260908103000||ADT^A01|PROBE1|P|2.5\r",
+    "PID|1||123456^^^HOSP^MR||DOE^JOHN||19800101|M"
+)
+.as_bytes();
 
 /// One sound ORDERS interchange, D96A: the EDIFACT probe.
 pub const EDIFACT_PROBE: &[u8] = b"UNA:+.? 'UNB+UNOC:3+SENDER+RECEIVER+260907:1345+REF001'\
@@ -63,6 +76,8 @@ impl Contract {
             Contract::Edifact => "edi-edifact",
             Contract::Regex => "regex",
             Contract::Schematron => "schematron",
+            Contract::Hl7v2 => "hl7-v2",
+            Contract::Fhir => "fhir",
         }
     }
 
@@ -80,6 +95,8 @@ impl Contract {
             Contract::Edifact => Shape::Edifact,
             Contract::Regex => Shape::Regex,
             Contract::Schematron => Shape::Schematron,
+            Contract::Hl7v2 => Shape::Hl7v2,
+            Contract::Fhir => Shape::Fhir,
         }
     }
 
@@ -100,6 +117,8 @@ impl Contract {
             Contract::Edifact => EDIFACT_PROBE.to_vec(),
             Contract::Regex => b"PROBE-4711 ping-pong".to_vec(),
             Contract::Schematron => b"<probe xmlns=\"urn:xmip:probe\"><n>1</n></probe>".to_vec(),
+            Contract::Hl7v2 => HL7_PROBE.to_vec(),
+            Contract::Fhir => br#"{"resourceType":"Patient","id":"probe-1"}"#.to_vec(),
         }
     }
 

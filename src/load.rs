@@ -291,7 +291,27 @@ fn large_payload(contract: Contract, target: usize) -> Vec<u8> {
             "</probe>",
             target,
         ),
+        Contract::Hl7v2 => large_hl7(target),
+        Contract::Fhir => wrap_to(
+            concat!(
+                r#"{"resourceType":"Bundle","type":"collection","entry":"#,
+                r#"[{"resource":{"resourceType":"Patient","id":"p0"}}"#
+            ),
+            r#",{"resource":{"resourceType":"Observation","id":"o"}}"#,
+            "]}",
+            target,
+        ),
     }
+}
+
+/// One ADT message padded with `NTE` segments to `target`, CR between segments
+/// and none at the end.
+fn large_hl7(target: usize) -> Vec<u8> {
+    let mut body = String::from_utf8_lossy(crate::verdict::HL7_PROBE).into_owned();
+    while body.len() < target {
+        body.push_str("\rNTE|1||heavy");
+    }
+    body.into_bytes()
 }
 
 /// `first` then `unit` lines to `target`, CRLF between and none at the end, so

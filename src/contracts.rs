@@ -18,7 +18,9 @@ use contract::{
 };
 use contract_csv::Csv;
 use contract_edi_edifact::Edifact;
+use contract_fhir::Fhir;
 use contract_fixed_width::FixedWidth;
+use contract_hl7_v2::Hl7v2;
 use contract_json_schema::JsonSchema;
 use contract_regex::RegexContract;
 use contract_schematron::Schematron;
@@ -48,6 +50,10 @@ pub enum Shape {
     Regex,
     /// Well-formed XML; bound rules would hold it.
     Schematron,
+    /// A sound HL7 v2 ER7 message.
+    Hl7v2,
+    /// A well-formed FHIR JSON resource.
+    Fhir,
 }
 
 impl Shape {
@@ -62,6 +68,8 @@ impl Shape {
             Shape::Html => "text/html",
             Shape::Csv => "text/csv",
             Shape::Edifact => "application/EDIFACT",
+            Shape::Hl7v2 => "x-application/hl7-v2+er7",
+            Shape::Fhir => "application/fhir+json",
         }
     }
 }
@@ -108,6 +116,8 @@ impl Contract for ContentContract {
             Shape::Edifact => return Edifact::new().validate(stream),
             Shape::Regex => return RegexContract::new().validate(stream),
             Shape::Schematron => return Schematron::new().validate(stream),
+            Shape::Hl7v2 => return Hl7v2::new().validate(stream),
+            Shape::Fhir => return Fhir::new().validate(stream),
             Shape::Bytes | Shape::Text | Shape::Html => {}
         }
         let issues = check(self.shape, stream.bytes());
@@ -138,7 +148,9 @@ fn check(shape: Shape, bytes: &[u8]) -> Vec<ValidationIssue> {
         | Shape::FixedWidth
         | Shape::Edifact
         | Shape::Regex
-        | Shape::Schematron => Vec::new(),
+        | Shape::Schematron
+        | Shape::Hl7v2
+        | Shape::Fhir => Vec::new(),
         Shape::Text => match std::str::from_utf8(bytes) {
             Ok(_) => Vec::new(),
             Err(error) => vec![issue(format!("not valid UTF-8: {error}"))],

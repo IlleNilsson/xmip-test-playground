@@ -13,11 +13,13 @@
 //! in mind is exactly this: a new transport is a new adapter, not a new
 //! scenario.
 
+use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 use transport::Transport;
 use transport_file::FileTransport;
 use transport_http::HttpTransport;
+use transport_mllp::MllpTransport;
 use transport_smtp::SmtpTransport;
 use transport_tcp::TcpTransport;
 use transport_udp::UdpTransport;
@@ -57,7 +59,83 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
         Box::new(SmtpRoundTrip::new()),
         Box::new(UdpRoundTrip::new()),
         Box::new(WebSocketRoundTrip::new()),
+        Box::new(MllpRoundTrip::new()),
     ]
+}
+
+/// The listen-and-accept shape tcp, http, smtp, websocket and mllp share, with
+/// the one rule that keeps a round from hanging the schedule: the accept runs
+/// on its own thread and the send on this one, and when the send fails before
+/// it connected — an ephemeral port exhausted, a refused connect under load —
+/// the listener is poked with a throwaway connect so the accept returns and is
+/// judged rather than waited on forever. Found 2026-09-08 when the matrix grew
+/// to twelve contracts over seven transports and one round out of thousands
+/// blocked a whole `cargo test` in `accept`.
+fn listen_exchange<A, S>(listener: TcpListener, address: &str, accept: A, send: S) -> Exchange
+where
+    A: FnOnce(&TcpListener) -> transport::Result<transport::Arrived> + Send + 'static,
+    S: FnOnce(&str) -> transport::Result<()>,
+{
+    let receiver = std::thread::spawn(move || accept(&listener));
+    let outcome = send(address);
+    if outcome.is_err() {
+        let _ = TcpStream::connect(address);
+    }
+    match (receiver.join(), outcome) {
+        (Ok(Ok(arrived)), Ok(())) => Exchange::Returned(arrived.bytes),
+        (_, Err(error)) => Exchange::Failed(format!("send failed: {error}")),
+        (Ok(Err(error)), Ok(())) => Exchange::Failed(format!("accept failed: {error}")),
+        (Err(_), Ok(())) => Exchange::Failed("the receiving thread panicked".to_string()),
+    }
+}
+
+/// MLLP: bind a listener, send one framed message from another thread, accept
+/// it, acknowledge on the same connection, and read the message back. The tcp
+/// shape with HL7's framing on top and the acknowledgement the sender waits for.
+pub struct MllpRoundTrip {
+    read_timeout: Duration,
+}
+
+impl MllpRoundTrip {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            read_timeout: Duration::from_secs(2),
+        }
+    }
+}
+
+impl Default for MllpRoundTrip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoundTrip for MllpRoundTrip {
+    fn transport(&self) -> &'static str {
+        "mllp"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = MllpTransport::new("127.0.0.1:0").timing_out_after(self.read_timeout);
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+        let timeout = self.read_timeout;
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| {
+                let (arrived, mut connection) = far_end.accept_one(listener)?;
+                // The acknowledgement is HL7's to compose; the probe answers with
+                // the bytes it got, which proves the reply channel and nothing more.
+                transport_mllp::acknowledge(&mut connection, &arrived.bytes)?;
+                Ok(arrived)
+            },
+            |address| transport_mllp::send_and_receive(address, payload, Some(timeout)).map(|_| ()),
+        )
+    }
 }
 
 /// File: send into a directory, read it back from the same directory. The
@@ -133,16 +211,12 @@ impl RoundTrip for TcpRoundTrip {
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
 
-        // The sender is another thread: connect to the bound address and send.
-        let payload = payload.to_vec();
-        let sender =
-            std::thread::spawn(move || TcpTransport::new("127.0.0.1:0").send(&address, &payload));
-
-        let caught = far_end.accept_one(&listener);
-
-        let sent = sender.join();
-
-        judge(caught, sent)
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| far_end.accept_one(listener),
+            |address| TcpTransport::new("127.0.0.1:0").send(address, payload),
+        )
     }
 }
 
@@ -178,16 +252,15 @@ impl RoundTrip for HttpRoundTrip {
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
 
-        let payload = payload.to_vec();
-        let sender = std::thread::spawn(move || {
-            HttpTransport::new("127.0.0.1:0").send(&format!("http://{address}/pingpong"), &payload)
-        });
-
-        let caught = far_end.accept_one(&listener);
-
-        let sent = sender.join();
-
-        judge(caught, sent)
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| far_end.accept_one(listener),
+            |address| {
+                HttpTransport::new("127.0.0.1:0")
+                    .send(&format!("http://{address}/pingpong"), payload)
+            },
+        )
     }
 }
 
@@ -221,17 +294,15 @@ impl RoundTrip for SmtpRoundTrip {
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
 
-        let payload = payload.to_vec();
-        let sender = std::thread::spawn(move || {
-            SmtpTransport::sending(address, "xmip@example.com")
-                .send("mailto:pingpong@example.com", &payload)
-        });
-
-        let caught = far_end.accept_one(&listener);
-
-        let sent = sender.join();
-
-        judge(caught, sent)
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| far_end.accept_one(listener),
+            |address| {
+                SmtpTransport::sending(address.to_string(), "xmip@example.com")
+                    .send("mailto:pingpong@example.com", payload)
+            },
+        )
     }
 }
 
@@ -266,17 +337,15 @@ impl RoundTrip for WebSocketRoundTrip {
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
 
-        let payload = payload.to_vec();
-        let sender = std::thread::spawn(move || {
-            WebSocketTransport::new("127.0.0.1:0")
-                .send(&format!("ws://{address}/pingpong"), &payload)
-        });
-
-        let caught = far_end.accept_one(&listener);
-
-        let sent = sender.join();
-
-        judge(caught, sent)
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| far_end.accept_one(listener),
+            |address| {
+                WebSocketTransport::new("127.0.0.1:0")
+                    .send(&format!("ws://{address}/pingpong"), payload)
+            },
+        )
     }
 }
 
@@ -317,31 +386,25 @@ impl RoundTrip for UdpRoundTrip {
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
 
+        // UDP cannot hang: the receive has a timeout, and a datagram that never
+        // arrives is a timeout, which is what UDP is.
         let payload = payload.to_vec();
         let sender =
             std::thread::spawn(move || UdpTransport::new("127.0.0.1:0").send(&address, &payload));
 
         let caught = far_end.receive_one(&socket);
 
-        let sent = sender.join();
-
-        judge(caught, sent)
+        match (caught, sender.join()) {
+            (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
+            (Err(error), _) => Exchange::Failed(format!("receive failed: {error}")),
+            (_, Ok(Err(error))) => Exchange::Failed(format!("send failed: {error}")),
+            (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
+        }
     }
 }
 
 /// The verdict every listen/accept transport reaches the same way: the payload
 /// came back iff both the receive and the send half succeeded.
-type Sent = std::thread::Result<transport::Result<()>>;
-
-fn judge(caught: transport::Result<transport::Arrived>, sent: Sent) -> Exchange {
-    match (caught, sent) {
-        (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
-        (Err(error), _) => Exchange::Failed(format!("accept failed: {error}")),
-        (_, Ok(Err(error))) => Exchange::Failed(format!("send failed: {error}")),
-        (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
