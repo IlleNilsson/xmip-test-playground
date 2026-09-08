@@ -32,7 +32,7 @@ pub fn ping_pong(transport: &dyn RoundTrip, contract: Contract) -> (Outcome, u64
             let arrived = Stream::new(
                 StreamId::new(1),
                 back,
-                Some(contract.shape().representation().to_string()),
+                Some(contract.representation().to_string()),
             );
             match contract.validate(&arrived) {
                 Ok(()) => Outcome::Delivered,
@@ -75,7 +75,7 @@ mod tests {
     fn the_same_scenario_runs_over_tcp() {
         // The point of the RoundTrip adapter: one scenario, a different
         // transport underneath, no change here.
-        let (outcome, _) = ping_pong(&TcpRoundTrip::new(), Contract::Bytes);
+        let (outcome, _) = ping_pong(&TcpRoundTrip, Contract::Bytes);
 
         assert_eq!(outcome, Outcome::Delivered);
     }

@@ -1,5 +1,5 @@
-//! The industrial round trips: modbus, bacnet, serial and can-bus, each behind
-//! the same [`RoundTrip`] the pingpong scenario drives.
+//! The industrial round trips: modbus, bacnet, serial, can-bus, IEC 104 and
+//! DNP3, each behind the same [`RoundTrip`] the pingpong scenario drives.
 //!
 //! These four carry small frames — a Modbus PDU is 253 bytes, a CAN frame
 //! eight — so a Stream travels as a sequence: transactions in turn on one
@@ -17,32 +17,17 @@ use std::time::Duration;
 use transport::Transport;
 use transport_bacnet::BacnetTransport;
 use transport_can_bus::{Bus, CanTransport, Loopback};
+use transport_dnp3::Dnp3Transport;
+use transport_iec_60870_5_104::Iec104Transport;
 use transport_modbus::ModbusTransport;
 use transport_serial::{Framing, SerialTransport};
 
-use crate::roundtrip::{Exchange, RoundTrip, listen_exchange};
+use crate::roundtrip::{Exchange, RoundTrip, TIMEOUT, listen_exchange};
 
 /// Modbus: bind a server, connect a client, send the payload as transactions
 /// of at most one PDU each, the server echoing every request, and read the
 /// stream back in order.
-pub struct ModbusRoundTrip {
-    timeout: Duration,
-}
-
-impl ModbusRoundTrip {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            timeout: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for ModbusRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct ModbusRoundTrip;
 
 impl RoundTrip for ModbusRoundTrip {
     fn transport(&self) -> &'static str {
@@ -50,12 +35,12 @@ impl RoundTrip for ModbusRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = ModbusTransport::new("127.0.0.1:0").timing_out_after(self.timeout);
+        let far_end = ModbusTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
         let (listener, address) = match far_end.bind() {
             Ok(bound) => bound,
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
-        let timeout = self.timeout;
+        let timeout = TIMEOUT;
         listen_exchange(
             listener,
             &address,
@@ -87,24 +72,7 @@ impl RoundTrip for ModbusRoundTrip {
 
 /// BACnet/IP: bind a socket, send the payload as unicast NPDUs in order and an
 /// empty one to close, and receive until the empty one.
-pub struct BacnetRoundTrip {
-    receive_timeout: Duration,
-}
-
-impl BacnetRoundTrip {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            receive_timeout: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for BacnetRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct BacnetRoundTrip;
 
 impl RoundTrip for BacnetRoundTrip {
     fn transport(&self) -> &'static str {
@@ -112,7 +80,7 @@ impl RoundTrip for BacnetRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = BacnetTransport::new("127.0.0.1:0").timing_out_after(self.receive_timeout);
+        let far_end = BacnetTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
         let (socket, address) = match far_end.bind() {
             Ok(bound) => bound,
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
@@ -200,6 +168,83 @@ impl RoundTrip for CanRoundTrip {
     }
 }
 
+/// IEC 104: bind a controlled station, connect a controlling one, send the
+/// payload as ASDUs of at most 249 bytes in sequence, each acknowledged,
+/// and read the stream back in order.
+pub struct Iec104RoundTrip;
+
+impl RoundTrip for Iec104RoundTrip {
+    fn transport(&self) -> &'static str {
+        "iec-60870-5-104"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = Iec104Transport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+        let timeout = TIMEOUT;
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| {
+                let mut station = far_end.accept_one(listener)?;
+                let mut origin = String::from("iec104://");
+                let mut bytes = Vec::new();
+                while let Some(arrived) = station.next_asdu()? {
+                    origin = arrived.origin_uri;
+                    bytes.extend_from_slice(&arrived.bytes);
+                }
+                Ok(transport::Arrived::new(origin, bytes))
+            },
+            |address| {
+                let mut controller = Iec104Transport::new("127.0.0.1:0")
+                    .timing_out_after(timeout)
+                    .connect(address)?;
+                for asdu in payload.chunks(transport_iec_60870_5_104::MAX_ASDU) {
+                    controller.send_asdu(asdu)?;
+                }
+                controller.stop()
+            },
+        )
+    }
+}
+
+/// DNP3: bind an outstation, connect a master, send the payload as one
+/// fragment however many segments it takes, and read it back whole.
+pub struct Dnp3RoundTrip;
+
+impl RoundTrip for Dnp3RoundTrip {
+    fn transport(&self) -> &'static str {
+        "dnp3"
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        let far_end = Dnp3Transport::new("127.0.0.1:0", 1024, 1).timing_out_after(TIMEOUT);
+        let (listener, address) = match far_end.bind() {
+            Ok(bound) => bound,
+            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+        };
+        let timeout = TIMEOUT;
+        listen_exchange(
+            listener,
+            &address,
+            move |listener| {
+                let mut outstation = far_end.accept_one(listener)?;
+                outstation.next_fragment()?.ok_or_else(|| {
+                    transport::error::protocol_error("the master closed without a fragment")
+                })
+            },
+            |address| {
+                Dnp3Transport::new("127.0.0.1:0", 1, 1024)
+                    .timing_out_after(timeout)
+                    .send(address, payload)
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,19 +261,27 @@ mod tests {
     #[test]
     fn modbus_carries_a_stream_as_transactions() {
         let long = vec![0x2a; 1000];
-        assert_eq!(
-            returned(&ModbusRoundTrip::new(), b"read holding"),
-            b"read holding"
-        );
-        assert_eq!(returned(&ModbusRoundTrip::new(), &long), long);
-        assert_eq!(returned(&ModbusRoundTrip::new(), b""), b"");
+        assert_eq!(returned(&ModbusRoundTrip, b"read holding"), b"read holding");
+        assert_eq!(returned(&ModbusRoundTrip, &long), long);
+        assert_eq!(returned(&ModbusRoundTrip, b""), b"");
     }
 
     #[test]
     fn bacnet_carries_a_stream_as_datagrams() {
         let long = vec![0x2a; 5000];
-        assert_eq!(returned(&BacnetRoundTrip::new(), b"who-is"), b"who-is");
-        assert_eq!(returned(&BacnetRoundTrip::new(), &long), long);
+        assert_eq!(returned(&BacnetRoundTrip, b"who-is"), b"who-is");
+        assert_eq!(returned(&BacnetRoundTrip, &long), long);
+    }
+
+    #[test]
+    fn iec_104_and_dnp3_carry_a_stream_to_a_station() {
+        let long = vec![0x2a; 3000];
+        assert_eq!(returned(&Iec104RoundTrip, b"asdu"), b"asdu");
+        assert_eq!(returned(&Iec104RoundTrip, &long), long);
+        assert_eq!(returned(&Iec104RoundTrip, b""), b"");
+        assert_eq!(returned(&Dnp3RoundTrip, b"fragment"), b"fragment");
+        assert_eq!(returned(&Dnp3RoundTrip, &long), long);
+        assert_eq!(returned(&Dnp3RoundTrip, b""), b"");
     }
 
     #[test]

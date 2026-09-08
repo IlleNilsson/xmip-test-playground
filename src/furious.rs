@@ -112,6 +112,15 @@ impl Furious {
         self
     }
 
+    /// Drive these transports rather than every one. The tests judge three;
+    /// the runner drives all, and a matrix of hundreds of pairs at size is
+    /// the runner's to take its time over, not a test's.
+    #[must_use]
+    pub fn over(mut self, transports: Vec<Box<dyn RoundTrip>>) -> Self {
+        self.transports = transports;
+        self
+    }
+
     /// Run every pair once, time it, fold it into the pair's ring, and return the
     /// snapshot to publish.
     pub fn tick(&mut self) -> Snapshot {
@@ -231,12 +240,23 @@ fn red(scope: &str, why: String, now: i64) -> HealthRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roundtrip::{FileRoundTrip, TcpRoundTrip, UdpRoundTrip};
+
+    /// The three transports the tests judge: file never spikes, and one of
+    /// the others must. The runner drives every one.
+    fn sample(dir: &std::path::Path) -> Vec<Box<dyn RoundTrip>> {
+        vec![
+            Box::new(FileRoundTrip::new(dir)),
+            Box::new(TcpRoundTrip),
+            Box::new(UdpRoundTrip),
+        ]
+    }
     use crate::support::scratch;
 
     #[test]
     fn a_clean_run_stays_within_budget_and_is_green() {
         let dir = scratch("clean");
-        let mut ff = Furious::new("xmip:///playground/furious", &dir);
+        let mut ff = Furious::new("xmip:///playground/furious", &dir).over(sample(&dir));
         let mut snapshot = ff.tick();
         for _ in 0..15 {
             snapshot = ff.tick();
@@ -252,7 +272,9 @@ mod tests {
     #[test]
     fn spikes_push_a_pair_over_its_budget() {
         let dir = scratch("spikes");
-        let mut ff = Furious::new("xmip:///playground/furious", &dir).under_pressure();
+        let mut ff = Furious::new("xmip:///playground/furious", &dir)
+            .over(sample(&dir))
+            .under_pressure();
         let mut snapshot = ff.tick();
         for _ in 0..80 {
             snapshot = ff.tick();

@@ -78,6 +78,15 @@ impl Load {
         self
     }
 
+    /// Drive these transports rather than every one. The tests judge three;
+    /// the runner drives all, and a matrix of hundreds of pairs at size is
+    /// the runner's to take its time over, not a test's.
+    #[must_use]
+    pub fn over(mut self, transports: Vec<Box<dyn RoundTrip>>) -> Self {
+        self.transports = transports;
+        self
+    }
+
     /// The same exercise at a chosen payload size — the knob that reaches
     /// gigabytes. Peak memory is roughly twice this per pair (the payload and the
     /// copy that comes back), and pairs run one at a time, so the machine needs
@@ -301,7 +310,36 @@ fn large_payload(contract: Contract, target: usize) -> Vec<u8> {
             "]}",
             target,
         ),
+        Contract::X12 => large_x12(target),
+        // Each record is about a dozen bytes; the container is judged by
+        // every one of them decoding against the schema it carries.
+        Contract::Avro => crate::verdict::avro_container(target / 12 + 1, "heavy record"),
+        Contract::GraphqlSchema => wrap_to("query Heavy { ", "probe { id ping } ", "}", target),
+        // Each field-3 entry is two bytes of tag and length and the text.
+        Contract::Protobuf => crate::verdict::protobuf_message(target / 12 + 1, "heavy rec."),
+        Contract::Wsdl => large_wsdl(target),
+        Contract::OpenApi => large_openapi(target),
+        Contract::AsyncApi => large_asyncapi(target),
     }
+}
+
+/// One 850 padded with `MSG` segments to `target`, its `SE` count kept true
+/// so the interchange stays sound at any size.
+fn large_x12(target: usize) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let probe = String::from_utf8_lossy(crate::verdict::X12_PROBE).into_owned();
+    let (head, _) = probe
+        .split_once("SE*4*0001~")
+        .expect("the probe closes its set");
+    let mut body = head.to_string();
+    let mut segments = 3; // ST, BEG and PO1
+    while body.len() < target {
+        body.push_str("MSG*heavy~");
+        segments += 1;
+    }
+    segments += 1; // SE itself
+    let _ = write!(body, "SE*{segments}*0001~GE*1*1~IEA*1*000000001~");
+    body.into_bytes()
 }
 
 /// One ADT message padded with `NTE` segments to `target`, CR between segments
@@ -367,20 +405,90 @@ pub fn as_stream(contract: Contract, bytes: Vec<u8>) -> Stream {
     Stream::new(
         StreamId::new(1),
         bytes,
-        Some(contract.shape().representation().to_string()),
+        Some(contract.representation().to_string()),
     )
+}
+
+/// One service description padded with messages to `target`, every
+/// reference still landing.
+fn large_wsdl(target: usize) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let probe = String::from_utf8_lossy(crate::verdict::WSDL_PROBE).into_owned();
+    let (head, tail) = probe
+        .split_once("<portType")
+        .expect("the probe has a port type");
+    let mut body = head.to_string();
+    let mut n = 0;
+    while body.len() + tail.len() < target {
+        let _ = write!(body, "<message name=\"M{n}\"/>");
+        n += 1;
+    }
+    body.push_str("<portType");
+    body.push_str(tail);
+    body.into_bytes()
+}
+
+/// One description padded with paths to `target`, each with its responses.
+fn large_openapi(target: usize) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut body =
+        String::from(r#"{"openapi":"3.0.3","info":{"title":"Heavy","version":"1"},"paths":{"#);
+    let mut n = 0;
+    while body.len() < target {
+        if n > 0 {
+            body.push(',');
+        }
+        let _ = write!(
+            body,
+            r#""/p{n}":{{"get":{{"responses":{{"200":{{"description":"ok"}}}}}}}}"#
+        );
+        n += 1;
+    }
+    body.push_str("}}");
+    body.into_bytes()
+}
+
+/// One description padded with channels to `target`.
+fn large_asyncapi(target: usize) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut body =
+        String::from(r#"{"asyncapi":"2.6.0","info":{"title":"Heavy","version":"1"},"channels":{"#);
+    let mut n = 0;
+    while body.len() < target {
+        if n > 0 {
+            body.push(',');
+        }
+        let _ = write!(
+            body,
+            r#""c/{n}":{{"subscribe":{{"message":{{"name":"m"}}}}}}"#
+        );
+        n += 1;
+    }
+    body.push_str("}}");
+    body.into_bytes()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::roundtrip::{FileRoundTrip, TcpRoundTrip, UdpRoundTrip};
+
+    /// The three transports the tests judge: enough to prove a megabyte
+    /// carries and that a datagram cannot. The runner drives every one.
+    fn sample(dir: &std::path::Path) -> Vec<Box<dyn RoundTrip>> {
+        vec![
+            Box::new(FileRoundTrip::new(dir)),
+            Box::new(TcpRoundTrip),
+            Box::new(UdpRoundTrip),
+        ]
+    }
     use crate::support::scratch;
     use observe::Health;
 
     #[test]
     fn a_large_payload_round_trips_over_file_and_tcp() {
         let dir = scratch("carry");
-        let mut hl = Load::new("xmip:///playground/load", &dir);
+        let mut hl = Load::new("xmip:///playground/load", &dir).over(sample(&dir));
         let snapshot = hl.tick();
         assert_eq!(
             snapshot.worst("xmip:///playground/load/file"),
@@ -398,7 +506,7 @@ mod tests {
     #[test]
     fn udp_cannot_carry_a_megabyte_and_says_so() {
         let dir = scratch("udp");
-        let mut hl = Load::new("xmip:///playground/load", &dir);
+        let mut hl = Load::new("xmip:///playground/load", &dir).over(sample(&dir));
         let snapshot = hl.tick();
         assert_ne!(
             snapshot.worst("xmip:///playground/load/udp"),
@@ -426,7 +534,9 @@ mod tests {
         // Just over the ceiling: a byte pattern, checked whole, no structural
         // parse. Over file only would be ideal, but a tick runs all transports;
         // the size is kept just past the ceiling so the test stays quick.
-        let mut hl = Load::new("xmip:///playground/load", &dir).with_bytes(VALIDATE_CEILING + 1);
+        let mut hl = Load::new("xmip:///playground/load", &dir)
+            .over(sample(&dir))
+            .with_bytes(VALIDATE_CEILING + 1);
         let snapshot = hl.tick();
         let file = snapshot
             .health("xmip:///playground/load/file")
@@ -458,7 +568,7 @@ mod tests {
     #[test]
     fn bytes_moved_accumulates() {
         let dir = scratch("bytes");
-        let mut hl = Load::new("xmip:///playground/load", &dir);
+        let mut hl = Load::new("xmip:///playground/load", &dir).over(sample(&dir));
         hl.tick();
         let snapshot = hl.tick();
         let moved = snapshot

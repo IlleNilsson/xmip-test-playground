@@ -41,6 +41,19 @@ transport_modbus = { package = "xmip-core-transport-modbus", git = "https://gith
 transport_bacnet = { package = "xmip-core-transport-bacnet", git = "https://github.com/IlleNilsson/xmip-core-transport-bacnet", branch = "main" }
 transport_serial = { package = "xmip-core-transport-serial", git = "https://github.com/IlleNilsson/xmip-core-transport-serial", branch = "main", default-features = false }
 transport_can_bus = { package = "xmip-core-transport-can-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-can-bus", branch = "main" }
+transport_mqtt = { package = "xmip-core-transport-mqtt", git = "https://github.com/IlleNilsson/xmip-core-transport-mqtt", branch = "main" }
+transport_nats = { package = "xmip-core-transport-nats", git = "https://github.com/IlleNilsson/xmip-core-transport-nats", branch = "main" }
+transport_syslog = { package = "xmip-core-transport-syslog", git = "https://github.com/IlleNilsson/xmip-core-transport-syslog", branch = "main" }
+transport_coap = { package = "xmip-core-transport-coap", git = "https://github.com/IlleNilsson/xmip-core-transport-coap", branch = "main" }
+transport_dns = { package = "xmip-core-transport-dns", git = "https://github.com/IlleNilsson/xmip-core-transport-dns", branch = "main" }
+transport_amqp = { package = "xmip-core-transport-amqp", git = "https://github.com/IlleNilsson/xmip-core-transport-amqp", branch = "main" }
+transport_dnp3 = { package = "xmip-core-transport-dnp3", git = "https://github.com/IlleNilsson/xmip-core-transport-dnp3", branch = "main" }
+transport_kafka = { package = "xmip-core-transport-kafka", git = "https://github.com/IlleNilsson/xmip-core-transport-kafka", branch = "main" }
+transport_iec_60870_5_104 = { package = "xmip-core-transport-iec-60870-5-104", git = "https://github.com/IlleNilsson/xmip-core-transport-iec-60870-5-104", branch = "main" }
+transport_imap = { package = "xmip-core-transport-imap", git = "https://github.com/IlleNilsson/xmip-core-transport-imap", branch = "main" }
+transport_redis_streams = { package = "xmip-core-transport-redis-streams", git = "https://github.com/IlleNilsson/xmip-core-transport-redis-streams", branch = "main" }
+transport_pop3 = { package = "xmip-core-transport-pop3", git = "https://github.com/IlleNilsson/xmip-core-transport-pop3", branch = "main" }
+transport_ftp = { package = "xmip-core-transport-ftp", git = "https://github.com/IlleNilsson/xmip-core-transport-ftp", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
@@ -78,6 +91,13 @@ contract_regex = { package = "xmip-core-contract-regex", git = "https://github.c
 contract_schematron = { package = "xmip-core-contract-schematron", git = "https://github.com/IlleNilsson/xmip-core-contract-schematron", branch = "main" }
 contract_hl7_v2 = { package = "xmip-core-contract-hl7-v2", git = "https://github.com/IlleNilsson/xmip-core-contract-hl7-v2", branch = "main" }
 contract_fhir = { package = "xmip-core-contract-fhir", git = "https://github.com/IlleNilsson/xmip-core-contract-fhir", branch = "main" }
+contract_edi_x12 = { package = "xmip-core-contract-edi-x12", git = "https://github.com/IlleNilsson/xmip-core-contract-edi-x12", branch = "main" }
+contract_avro = { package = "xmip-core-contract-avro", git = "https://github.com/IlleNilsson/xmip-core-contract-avro", branch = "main" }
+contract_protobuf = { package = "xmip-core-contract-protobuf", git = "https://github.com/IlleNilsson/xmip-core-contract-protobuf", branch = "main" }
+contract_asyncapi = { package = "xmip-core-contract-asyncapi", git = "https://github.com/IlleNilsson/xmip-core-contract-asyncapi", branch = "main" }
+contract_openapi = { package = "xmip-core-contract-openapi", git = "https://github.com/IlleNilsson/xmip-core-contract-openapi", branch = "main" }
+contract_wsdl = { package = "xmip-core-contract-wsdl", git = "https://github.com/IlleNilsson/xmip-core-contract-wsdl", branch = "main" }
+contract_graphql_schema = { package = "xmip-core-contract-graphql-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-graphql-schema", branch = "main" }
 
 # The snapshot and history files are written in TOML: on disk is TOML across the
 # estate, JSON is reserved for memory and the wire (the owner's rule). serde

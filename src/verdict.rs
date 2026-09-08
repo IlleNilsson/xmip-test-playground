@@ -10,7 +10,7 @@ use observe::{Health, HealthRecord};
 use stream::Stream;
 use xcore::StreamId;
 
-use crate::contracts::{ContentContract, Shape};
+use crate::contracts::ContentContract;
 
 /// The content a probe sends and expects back. The matrix's second axis;
 /// ADR-0028 exercises every transport by every contract. Each carries an actual
@@ -45,6 +45,89 @@ pub enum Contract {
     Hl7v2,
     /// A FHIR resource, the `fhir` contract technology.
     Fhir,
+    /// An ASC X12 interchange, the `edi-x12` contract technology.
+    X12,
+    /// An Avro object container file, the `avro` contract technology.
+    Avro,
+    /// A GraphQL document, the `graphql-schema` contract technology.
+    GraphqlSchema,
+    /// Protocol Buffers wire format, the `protobuf` contract technology.
+    Protobuf,
+    /// A WSDL description, the `wsdl` contract technology.
+    Wsdl,
+    /// An `OpenAPI` description, the `openapi` contract technology.
+    OpenApi,
+    /// An `AsyncAPI` description, the `asyncapi` contract technology.
+    AsyncApi,
+}
+
+/// One WSDL 1.1 description of a single service: the WSDL probe.
+pub const WSDL_PROBE: &[u8] = concat!(
+    r#"<definitions name="Probe" targetNamespace="urn:probe" xmlns:tns="urn:probe" "#,
+    r#"xmlns="http://schemas.xmlsoap.org/wsdl/">"#,
+    r#"<message name="PingIn"/><portType name="ProbePort"><operation name="Ping">"#,
+    r#"<input message="tns:PingIn"/></operation></portType>"#,
+    r#"<binding name="ProbeSoap" type="tns:ProbePort"/>"#,
+    r#"<service name="ProbeService"><port name="Probe" binding="tns:ProbeSoap"/></service>"#,
+    r"</definitions>"
+)
+.as_bytes();
+
+/// One `OpenAPI` 3.0 description of a single operation: the `OpenAPI` probe.
+pub const OPENAPI_PROBE: &[u8] = concat!(
+    r#"{"openapi":"3.0.3","info":{"title":"Probe","version":"1"},"paths":{"/ping":"#,
+    r#"{"post":{"operationId":"ping","responses":{"200":{"description":"pong"}}}}}}"#
+)
+.as_bytes();
+
+/// One `AsyncAPI` 2.6 description of a single channel: the `AsyncAPI` probe.
+pub const ASYNCAPI_PROBE: &[u8] = concat!(
+    r#"{"asyncapi":"2.6.0","info":{"title":"Probe","version":"1"},"channels":"#,
+    r#"{"probe/ping":{"subscribe":{"message":{"payload":{"type":"string"}}}}}}"#
+)
+.as_bytes();
+
+/// One protobuf message of `n` records: field 1 a varint, field 2 a string,
+/// then `n` length-delimited field 3 entries carrying `text`.
+#[must_use]
+pub fn protobuf_message(n: usize, text: &str) -> Vec<u8> {
+    use contract_protobuf::wire::{encode_delimited, encode_tag, encode_varint};
+    let mut out = encode_tag(1, 0);
+    out.extend(encode_varint(1));
+    out.extend(encode_delimited(2, b"ping-pong"));
+    for _ in 0..n {
+        out.extend(encode_delimited(3, text.as_bytes()));
+    }
+    out
+}
+
+/// One sound 850 purchase order, version 004010: the X12 probe. `ISA` is its
+/// fixed 106 characters, separators `*`, `>` and `~`, and no line breaks.
+pub const X12_PROBE: &[u8] =
+    b"ISA*00*          *00*          *ZZ*SENDER         *ZZ*RECEIVER       \
+*260908*1030*U*00401*000000001*0*P*>~GS*PO*SENDER*RECEIVER*20260908*1030*1*X*004010~\
+ST*850*0001~BEG*00*SA*PO4711**20260908~PO1*1*2*EA*10.00**VP*X001~SE*4*0001~\
+GE*1*1~IEA*1*000000001~";
+
+/// The schema every Avro probe carries: a record of an int and a string.
+pub const AVRO_SCHEMA: &str = concat!(
+    r#"{"type":"record","name":"Probe","namespace":"xmip","fields":"#,
+    r#"[{"name":"n","type":"int"},{"name":"s","type":"string"}]}"#
+);
+
+/// An Avro container of `count` probe records, each numbered and carrying
+/// `text`, in one block under the `null` codec.
+#[must_use]
+pub fn avro_container(count: usize, text: &str) -> Vec<u8> {
+    use contract_avro::binary::{encode_long, encode_string};
+    let datums: Vec<Vec<u8>> = (0..count)
+        .map(|n| {
+            let mut datum = encode_long(i64::try_from(n).unwrap_or(0));
+            datum.extend(encode_string(text));
+            datum
+        })
+        .collect();
+    contract_avro::container::write(AVRO_SCHEMA, &datums)
 }
 
 /// One ADT^A01 admission, HL7 v2.5: carriage returns between segments, as HL7
@@ -78,25 +161,13 @@ impl Contract {
             Contract::Schematron => "schematron",
             Contract::Hl7v2 => "hl7-v2",
             Contract::Fhir => "fhir",
-        }
-    }
-
-    /// The content shape this contract holds its Stream to.
-    #[must_use]
-    pub const fn shape(self) -> Shape {
-        match self {
-            Contract::Bytes => Shape::Bytes,
-            Contract::Text => Shape::Text,
-            Contract::Json => Shape::Json,
-            Contract::Xml => Shape::Xml,
-            Contract::Html => Shape::Html,
-            Contract::Csv => Shape::Csv,
-            Contract::FixedWidth => Shape::FixedWidth,
-            Contract::Edifact => Shape::Edifact,
-            Contract::Regex => Shape::Regex,
-            Contract::Schematron => Shape::Schematron,
-            Contract::Hl7v2 => Shape::Hl7v2,
-            Contract::Fhir => Shape::Fhir,
+            Contract::X12 => "edi-x12",
+            Contract::Avro => "avro",
+            Contract::GraphqlSchema => "graphql-schema",
+            Contract::Protobuf => "protobuf",
+            Contract::Wsdl => "wsdl",
+            Contract::OpenApi => "openapi",
+            Contract::AsyncApi => "asyncapi",
         }
     }
 
@@ -119,6 +190,13 @@ impl Contract {
             Contract::Schematron => b"<probe xmlns=\"urn:xmip:probe\"><n>1</n></probe>".to_vec(),
             Contract::Hl7v2 => HL7_PROBE.to_vec(),
             Contract::Fhir => br#"{"resourceType":"Patient","id":"probe-1"}"#.to_vec(),
+            Contract::X12 => X12_PROBE.to_vec(),
+            Contract::Avro => avro_container(1, "ping-pong"),
+            Contract::GraphqlSchema => b"query Probe { probe(n: 1) { id ping } }".to_vec(),
+            Contract::Protobuf => protobuf_message(1, "ping-pong"),
+            Contract::Wsdl => WSDL_PROBE.to_vec(),
+            Contract::OpenApi => OPENAPI_PROBE.to_vec(),
+            Contract::AsyncApi => ASYNCAPI_PROBE.to_vec(),
         }
     }
 
@@ -129,7 +207,7 @@ impl Contract {
         Stream::new(
             StreamId::new(1),
             self.payload(),
-            Some(self.shape().representation().to_string()),
+            Some(self.representation().to_string()),
         )
     }
 
@@ -140,7 +218,7 @@ impl Contract {
     ///
     /// When the Stream is not identified as this contract's, or fails validation.
     pub fn validate(self, arrived: &Stream) -> Result<(), String> {
-        let contract = ContentContract::new(self.name(), self.shape());
+        let contract = ContentContract::new(self);
 
         match contract.identify(arrived) {
             Ok(true) => {}

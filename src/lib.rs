@@ -46,6 +46,7 @@
 
 pub mod budget;
 pub mod claim;
+pub mod collect;
 pub mod contracts;
 pub mod daily;
 pub mod fault;
@@ -53,18 +54,21 @@ pub mod furious;
 pub mod identity;
 pub mod industrial;
 pub mod load;
+pub mod messaging;
 pub mod pingpong;
+pub mod record;
 pub mod report;
 pub mod roundtrip;
 pub mod schedule;
 pub mod secretary;
 pub mod standing;
 mod support;
+pub mod telemetry;
 pub mod verdict;
 
 pub use budget::Budget;
 pub use claim::Claim;
-pub use contracts::{ContentContract, Shape};
+pub use contracts::ContentContract;
 pub use daily::Daily;
 pub use fault::{Fault, FaultKind, FaultPlan};
 pub use furious::Furious;

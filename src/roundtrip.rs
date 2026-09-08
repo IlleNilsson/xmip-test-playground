@@ -36,6 +36,12 @@ pub enum Exchange {
     Failed(String),
 }
 
+/// How long any adapter waits on its far end before the round is judged
+/// rather than waited on: a lost datagram, a peer that never connects, a
+/// broker gone quiet. Two seconds is long enough for loopback and short
+/// enough that a matrix of hundreds of pairs stays a test.
+pub const TIMEOUT: Duration = Duration::from_secs(2);
+
 /// A transport the pingpong scenario can drive, behind one method.
 pub trait RoundTrip {
     /// The transport token, as it appears in a scope and a repository name.
@@ -54,16 +60,29 @@ pub trait RoundTrip {
 pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn RoundTrip>> {
     vec![
         Box::new(FileRoundTrip::new(file_dir)),
-        Box::new(TcpRoundTrip::new()),
-        Box::new(HttpRoundTrip::new()),
-        Box::new(SmtpRoundTrip::new()),
-        Box::new(UdpRoundTrip::new()),
-        Box::new(WebSocketRoundTrip::new()),
-        Box::new(MllpRoundTrip::new()),
-        Box::new(crate::industrial::ModbusRoundTrip::new()),
-        Box::new(crate::industrial::BacnetRoundTrip::new()),
+        Box::new(TcpRoundTrip),
+        Box::new(HttpRoundTrip),
+        Box::new(SmtpRoundTrip),
+        Box::new(UdpRoundTrip),
+        Box::new(WebSocketRoundTrip),
+        Box::new(MllpRoundTrip),
+        Box::new(crate::industrial::ModbusRoundTrip),
+        Box::new(crate::industrial::BacnetRoundTrip),
         Box::new(crate::industrial::SerialRoundTrip),
         Box::new(crate::industrial::CanRoundTrip),
+        Box::new(crate::messaging::MqttRoundTrip),
+        Box::new(crate::messaging::NatsRoundTrip),
+        Box::new(crate::telemetry::SyslogRoundTrip),
+        Box::new(crate::telemetry::CoapRoundTrip),
+        Box::new(crate::collect::FtpRoundTrip),
+        Box::new(crate::collect::Pop3RoundTrip),
+        Box::new(crate::record::RedisStreamsRoundTrip),
+        Box::new(crate::record::DnsRoundTrip),
+        Box::new(crate::collect::ImapRoundTrip),
+        Box::new(crate::messaging::AmqpRoundTrip),
+        Box::new(crate::industrial::Iec104RoundTrip),
+        Box::new(crate::industrial::Dnp3RoundTrip),
+        Box::new(crate::messaging::KafkaRoundTrip),
     ]
 }
 
@@ -101,24 +120,7 @@ where
 /// MLLP: bind a listener, send one framed message from another thread, accept
 /// it, acknowledge on the same connection, and read the message back. The tcp
 /// shape with HL7's framing on top and the acknowledgement the sender waits for.
-pub struct MllpRoundTrip {
-    read_timeout: Duration,
-}
-
-impl MllpRoundTrip {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            read_timeout: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for MllpRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct MllpRoundTrip;
 
 impl RoundTrip for MllpRoundTrip {
     fn transport(&self) -> &'static str {
@@ -126,12 +128,12 @@ impl RoundTrip for MllpRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = MllpTransport::new("127.0.0.1:0").timing_out_after(self.read_timeout);
+        let far_end = MllpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
         let (listener, address) = match far_end.bind() {
             Ok(bound) => bound,
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
-        let timeout = self.read_timeout;
+        let timeout = TIMEOUT;
         listen_exchange(
             listener,
             &address,
@@ -184,27 +186,7 @@ impl RoundTrip for FileRoundTrip {
 
 /// TCP: bind a listener, connect and send from another thread, accept the one
 /// connection and read it. The listen/accept shape http and smtp also take.
-pub struct TcpRoundTrip {
-    accept_timeout: Duration,
-}
-
-impl TcpRoundTrip {
-    #[must_use]
-    pub fn new() -> Self {
-        // A short timeout so a round that cannot connect fails the test rather
-        // than hanging the schedule — the point of exercising over time is that
-        // no one round can stop the next.
-        Self {
-            accept_timeout: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for TcpRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct TcpRoundTrip;
 
 impl RoundTrip for TcpRoundTrip {
     fn transport(&self) -> &'static str {
@@ -213,7 +195,7 @@ impl RoundTrip for TcpRoundTrip {
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
         // Bind on an ephemeral port; the OS hands back the real address.
-        let far_end = TcpTransport::new("127.0.0.1:0").timing_out_after(self.accept_timeout);
+        let far_end = TcpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
 
         let (listener, address) = match far_end.bind() {
             Ok(bound) => bound,
@@ -362,24 +344,7 @@ impl RoundTrip for WebSocketRoundTrip {
 /// is bound is dropped silently), learn its address, fire one datagram from
 /// another thread, receive it. A read timeout keeps a lost datagram from
 /// hanging the round — UDP has no delivery guarantee.
-pub struct UdpRoundTrip {
-    receive_timeout: Duration,
-}
-
-impl UdpRoundTrip {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            receive_timeout: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for UdpRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct UdpRoundTrip;
 
 impl RoundTrip for UdpRoundTrip {
     fn transport(&self) -> &'static str {
@@ -387,7 +352,7 @@ impl RoundTrip for UdpRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = UdpTransport::new("127.0.0.1:0").timing_out_after(self.receive_timeout);
+        let far_end = UdpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
 
         // Bind before the sender fires, or the datagram is gone.
         let (socket, address) = match far_end.bind() {
@@ -433,7 +398,7 @@ mod tests {
 
     #[test]
     fn tcp_round_trips_a_payload_over_a_real_socket() {
-        let rt = TcpRoundTrip::new();
+        let rt = TcpRoundTrip;
 
         match rt.exchange(b"over tcp") {
             Exchange::Returned(bytes) => assert_eq!(bytes, b"over tcp"),
@@ -443,7 +408,7 @@ mod tests {
 
     #[test]
     fn tcp_carries_binary_unharmed() {
-        let rt = TcpRoundTrip::new();
+        let rt = TcpRoundTrip;
         let payload = [0x00u8, 0x01, 0xfe, 0xff];
 
         match rt.exchange(&payload) {
@@ -454,7 +419,7 @@ mod tests {
 
     #[test]
     fn http_round_trips_a_body() {
-        let rt = HttpRoundTrip::new();
+        let rt = HttpRoundTrip;
 
         match rt.exchange(b"<order/>") {
             Exchange::Returned(bytes) => assert_eq!(bytes, b"<order/>"),
@@ -464,7 +429,7 @@ mod tests {
 
     #[test]
     fn smtp_round_trips_a_message() {
-        let rt = SmtpRoundTrip::new();
+        let rt = SmtpRoundTrip;
 
         match rt.exchange(b"Subject: ping\r\n\r\npong") {
             Exchange::Returned(bytes) => assert_eq!(bytes, b"Subject: ping\r\n\r\npong"),
@@ -474,7 +439,7 @@ mod tests {
 
     #[test]
     fn udp_round_trips_a_datagram() {
-        let rt = UdpRoundTrip::new();
+        let rt = UdpRoundTrip;
         let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
 
         match rt.exchange(&payload) {
@@ -485,7 +450,7 @@ mod tests {
 
     #[test]
     fn websocket_round_trips_a_frame() {
-        let rt = WebSocketRoundTrip::new();
+        let rt = WebSocketRoundTrip;
         let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
 
         match rt.exchange(&payload) {

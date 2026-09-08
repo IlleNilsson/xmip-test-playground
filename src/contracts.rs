@@ -14,89 +14,77 @@
 //! local: no contract technology claims them.
 
 use contract::{
-    Contract, ContractDescriptor, ContractError, ContractId, ValidationIssue, ValidationResult,
+    Contract as ContractTrait, ContractDescriptor, ContractError, ContractId, ValidationIssue,
+    ValidationResult,
 };
+use contract_asyncapi::AsyncApi;
+use contract_avro::Avro;
 use contract_csv::Csv;
 use contract_edi_edifact::Edifact;
+use contract_edi_x12::X12;
 use contract_fhir::Fhir;
 use contract_fixed_width::FixedWidth;
+use contract_graphql_schema::GraphqlSchema;
 use contract_hl7_v2::Hl7v2;
 use contract_json_schema::JsonSchema;
+use contract_openapi::OpenApi;
+use contract_protobuf::Protobuf;
 use contract_regex::RegexContract;
 use contract_schematron::Schematron;
+use contract_wsdl::Wsdl;
 use contract_xml_schema::XmlSchema;
 use stream::Stream;
 
-/// The content shape a contract holds a Stream to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shape {
-    /// No structural claim. Any bytes hold.
-    Bytes,
-    /// Valid UTF-8.
-    Text,
-    /// Well-formed JSON.
-    Json,
-    /// Well-formed XML — tags balanced and nested.
-    Xml,
-    /// Carries HTML markup.
-    Html,
-    /// Rows with a consistent field count and CSV quoting.
-    Csv,
-    /// Text records; a bound copybook would lay them out.
-    FixedWidth,
-    /// A sound UN/EDIFACT interchange.
-    Edifact,
-    /// Text; a bound pattern would hold it.
-    Regex,
-    /// Well-formed XML; bound rules would hold it.
-    Schematron,
-    /// A sound HL7 v2 ER7 message.
-    Hl7v2,
-    /// A well-formed FHIR JSON resource.
-    Fhir,
-}
+use crate::verdict::Contract;
 
-impl Shape {
-    /// The media type a Stream of this shape declares.
+impl Contract {
+    /// The media type a Stream of this contract declares.
     #[must_use]
     pub const fn representation(self) -> &'static str {
         match self {
-            Shape::Bytes => "application/octet-stream",
-            Shape::Text | Shape::FixedWidth | Shape::Regex => "text/plain",
-            Shape::Json => "application/json",
-            Shape::Xml | Shape::Schematron => "application/xml",
-            Shape::Html => "text/html",
-            Shape::Csv => "text/csv",
-            Shape::Edifact => "application/EDIFACT",
-            Shape::Hl7v2 => "x-application/hl7-v2+er7",
-            Shape::Fhir => "application/fhir+json",
+            Contract::Bytes => "application/octet-stream",
+            Contract::Text | Contract::FixedWidth | Contract::Regex => "text/plain",
+            Contract::Json => "application/json",
+            Contract::Xml | Contract::Schematron => "application/xml",
+            Contract::Html => "text/html",
+            Contract::Csv => "text/csv",
+            Contract::Edifact => "application/EDIFACT",
+            Contract::Hl7v2 => "x-application/hl7-v2+er7",
+            Contract::Fhir => "application/fhir+json",
+            Contract::X12 => "application/EDI-X12",
+            Contract::Avro => "application/avro",
+            Contract::GraphqlSchema => "application/graphql",
+            Contract::Protobuf => "application/protobuf",
+            Contract::Wsdl => "application/wsdl+xml",
+            Contract::OpenApi => "application/vnd.oai.openapi+json",
+            Contract::AsyncApi => "application/vnd.aai.asyncapi+json",
         }
     }
 }
 
 /// A content contract the playground exercises. Implements the estate's
-/// [`Contract`] trait, so the pingpong validates an arrived Stream exactly as a
+/// [`ContractTrait`], so the pingpong validates an arrived Stream exactly as a
 /// Journey would.
 pub struct ContentContract {
     descriptor: ContractDescriptor,
-    shape: Shape,
+    contract: Contract,
 }
 
 impl ContentContract {
     #[must_use]
-    pub fn new(name: &str, shape: Shape) -> Self {
+    pub fn new(contract: Contract) -> Self {
         Self {
             descriptor: ContractDescriptor {
-                id: ContractId(format!("pingpong-{name}")),
+                id: ContractId(format!("pingpong-{}", contract.name())),
                 version: "1".to_string(),
-                representation: shape.representation().to_string(),
+                representation: contract.representation().to_string(),
             },
-            shape,
+            contract,
         }
     }
 }
 
-impl Contract for ContentContract {
+impl ContractTrait for ContentContract {
     fn descriptor(&self) -> &ContractDescriptor {
         &self.descriptor
     }
@@ -108,19 +96,26 @@ impl Contract for ContentContract {
     }
 
     fn validate(&self, stream: &Stream) -> Result<ValidationResult, ContractError> {
-        match self.shape {
-            Shape::Json => return JsonSchema::new().validate(stream),
-            Shape::Xml => return XmlSchema::new().validate(stream),
-            Shape::Csv => return Csv::new().validate(stream),
-            Shape::FixedWidth => return FixedWidth::new().validate(stream),
-            Shape::Edifact => return Edifact::new().validate(stream),
-            Shape::Regex => return RegexContract::new().validate(stream),
-            Shape::Schematron => return Schematron::new().validate(stream),
-            Shape::Hl7v2 => return Hl7v2::new().validate(stream),
-            Shape::Fhir => return Fhir::new().validate(stream),
-            Shape::Bytes | Shape::Text | Shape::Html => {}
+        match self.contract {
+            Contract::Json => return JsonSchema::new().validate(stream),
+            Contract::Xml => return XmlSchema::new().validate(stream),
+            Contract::Csv => return Csv::new().validate(stream),
+            Contract::FixedWidth => return FixedWidth::new().validate(stream),
+            Contract::Edifact => return Edifact::new().validate(stream),
+            Contract::Regex => return RegexContract::new().validate(stream),
+            Contract::Schematron => return Schematron::new().validate(stream),
+            Contract::Hl7v2 => return Hl7v2::new().validate(stream),
+            Contract::Fhir => return Fhir::new().validate(stream),
+            Contract::X12 => return X12::new().validate(stream),
+            Contract::Avro => return Avro::new().validate(stream),
+            Contract::GraphqlSchema => return GraphqlSchema::new().validate(stream),
+            Contract::Protobuf => return Protobuf::new().validate(stream),
+            Contract::Wsdl => return Wsdl::new().validate(stream),
+            Contract::OpenApi => return OpenApi::new().validate(stream),
+            Contract::AsyncApi => return AsyncApi::new().validate(stream),
+            Contract::Bytes | Contract::Text | Contract::Html => {}
         }
-        let issues = check(self.shape, stream.bytes());
+        let issues = check(self.contract, stream.bytes());
 
         Ok(ValidationResult {
             valid: issues.is_empty(),
@@ -137,25 +132,32 @@ fn issue(message: impl Into<String>) -> ValidationIssue {
     }
 }
 
-/// The one structural check per local shape. Empty means it held. Every shape
+/// The one structural check per local contract. Empty means it held. Every contract
 /// with a contract technology never reaches here: `validate` hands it over.
-fn check(shape: Shape, bytes: &[u8]) -> Vec<ValidationIssue> {
-    match shape {
-        Shape::Bytes
-        | Shape::Json
-        | Shape::Xml
-        | Shape::Csv
-        | Shape::FixedWidth
-        | Shape::Edifact
-        | Shape::Regex
-        | Shape::Schematron
-        | Shape::Hl7v2
-        | Shape::Fhir => Vec::new(),
-        Shape::Text => match std::str::from_utf8(bytes) {
+fn check(contract: Contract, bytes: &[u8]) -> Vec<ValidationIssue> {
+    match contract {
+        Contract::Bytes
+        | Contract::Json
+        | Contract::Xml
+        | Contract::Csv
+        | Contract::FixedWidth
+        | Contract::Edifact
+        | Contract::Regex
+        | Contract::Schematron
+        | Contract::Hl7v2
+        | Contract::Fhir
+        | Contract::X12
+        | Contract::Avro
+        | Contract::GraphqlSchema
+        | Contract::Protobuf
+        | Contract::Wsdl
+        | Contract::OpenApi
+        | Contract::AsyncApi => Vec::new(),
+        Contract::Text => match std::str::from_utf8(bytes) {
             Ok(_) => Vec::new(),
             Err(error) => vec![issue(format!("not valid UTF-8: {error}"))],
         },
-        Shape::Html => has_markup(bytes),
+        Contract::Html => has_markup(bytes),
     }
 }
 
@@ -173,52 +175,52 @@ mod tests {
     use super::*;
     use xcore::StreamId;
 
-    fn stream(shape: Shape, bytes: &[u8]) -> Stream {
+    fn stream(contract: Contract, bytes: &[u8]) -> Stream {
         Stream::new(
             StreamId::new(1),
             bytes.to_vec(),
-            Some(shape.representation().to_string()),
+            Some(contract.representation().to_string()),
         )
     }
 
-    fn holds(shape: Shape, bytes: &[u8]) -> bool {
-        ContentContract::new("t", shape)
-            .validate(&stream(shape, bytes))
+    fn holds(contract: Contract, bytes: &[u8]) -> bool {
+        ContentContract::new(contract)
+            .validate(&stream(contract, bytes))
             .expect("validation runs")
             .valid
     }
 
     #[test]
     fn valid_json_holds_and_broken_json_does_not() {
-        assert!(holds(Shape::Json, br#"{"probe":"ping-pong","n":1}"#));
-        assert!(!holds(Shape::Json, b"{not json"));
+        assert!(holds(Contract::Json, br#"{"probe":"ping-pong","n":1}"#));
+        assert!(!holds(Contract::Json, b"{not json"));
     }
 
     #[test]
     fn well_formed_xml_holds_and_a_dangling_tag_does_not() {
-        assert!(holds(Shape::Xml, b"<probe><n>1</n>ping-pong</probe>"));
-        assert!(!holds(Shape::Xml, b"<probe><n>1</probe>"));
-        assert!(!holds(Shape::Xml, b"<probe>never closed"));
+        assert!(holds(Contract::Xml, b"<probe><n>1</n>ping-pong</probe>"));
+        assert!(!holds(Contract::Xml, b"<probe><n>1</probe>"));
+        assert!(!holds(Contract::Xml, b"<probe>never closed"));
     }
 
     #[test]
     fn text_rejects_invalid_utf8_but_bytes_never_complains() {
-        assert!(holds(Shape::Text, "xmip ✓".as_bytes()));
-        assert!(!holds(Shape::Text, &[0xff, 0xfe]));
-        assert!(holds(Shape::Bytes, &[0xff, 0xfe]));
+        assert!(holds(Contract::Text, "xmip ✓".as_bytes()));
+        assert!(!holds(Contract::Text, &[0xff, 0xfe]));
+        assert!(holds(Contract::Bytes, &[0xff, 0xfe]));
     }
 
     #[test]
     fn identify_matches_the_declared_media_type() {
-        let contract = ContentContract::new("json", Shape::Json);
+        let contract = ContentContract::new(Contract::Json);
         assert!(
             contract
-                .identify(&stream(Shape::Json, b"{}"))
+                .identify(&stream(Contract::Json, b"{}"))
                 .expect("identify runs")
         );
         assert!(
             !contract
-                .identify(&stream(Shape::Text, b"{}"))
+                .identify(&stream(Contract::Text, b"{}"))
                 .expect("identify runs")
         );
     }

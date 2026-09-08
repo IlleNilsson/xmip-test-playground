@@ -46,7 +46,7 @@ impl Tally {
 /// Every contract the playground exercises today: the three local shapes and
 /// every contract technology the estate has landed. ADR-0028's matrix is every
 /// transport by every one of these.
-pub const CONTRACTS: [Contract; 12] = [
+pub const CONTRACTS: [Contract; 19] = [
     Contract::Bytes,
     Contract::Text,
     Contract::Json,
@@ -59,6 +59,13 @@ pub const CONTRACTS: [Contract; 12] = [
     Contract::Schematron,
     Contract::Hl7v2,
     Contract::Fhir,
+    Contract::X12,
+    Contract::Avro,
+    Contract::GraphqlSchema,
+    Contract::Protobuf,
+    Contract::Wsdl,
+    Contract::OpenApi,
+    Contract::AsyncApi,
 ];
 
 /// A scheduled exercise of the estate's transports over the message path. Holds
@@ -118,6 +125,14 @@ impl Schedule {
             IdentityFaults::realistic()
         };
         self.faults = faults;
+        self
+    }
+
+    /// Drive these transports rather than every one. A test that judges the
+    /// rollup over forty rounds needs three; the runner drives all.
+    #[must_use]
+    pub fn over(mut self, transports: Vec<Box<dyn RoundTrip>>) -> Self {
+        self.transports = transports;
         self
     }
 
@@ -412,8 +427,13 @@ mod tests {
     #[test]
     fn injected_faults_turn_pairs_done_but_leave_file_fine() {
         let dir = scratch("faults");
-        let mut schedule =
-            Schedule::new("xmip:///playground", &dir).with_faults(FaultPlan::realistic());
+        let mut schedule = Schedule::new("xmip:///playground", &dir)
+            .with_faults(FaultPlan::realistic())
+            .over(vec![
+                Box::new(crate::roundtrip::FileRoundTrip::new(&dir)),
+                Box::new(crate::roundtrip::TcpRoundTrip),
+                Box::new(crate::roundtrip::UdpRoundTrip),
+            ]);
 
         let mut snapshot = schedule.tick();
         for _ in 0..40 {
