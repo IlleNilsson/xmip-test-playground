@@ -83,6 +83,22 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
         Box::new(crate::industrial::Iec104RoundTrip),
         Box::new(crate::industrial::Dnp3RoundTrip),
         Box::new(crate::messaging::KafkaRoundTrip),
+        Box::new(crate::factory::CotpRoundTrip),
+        Box::new(crate::factory::S7RoundTrip),
+        Box::new(crate::factory::SecsGemRoundTrip),
+        Box::new(crate::storage::S3RoundTrip),
+        Box::new(crate::storage::AzureBlobRoundTrip),
+        Box::new(crate::storage::GcsRoundTrip),
+        Box::new(crate::storage::WebDavRoundTrip),
+        Box::new(crate::broker::ActiveMqRoundTrip),
+        Box::new(crate::broker::RabbitMqRoundTrip),
+        Box::new(crate::broker::JetStreamRoundTrip),
+        Box::new(crate::broker::RedpandaRoundTrip),
+        Box::new(crate::broker::PostgresqlRoundTrip),
+        Box::new(crate::discovery::SsdpRoundTrip),
+        Box::new(crate::discovery::MdnsRoundTrip),
+        Box::new(crate::discovery::DhcpRoundTrip),
+        Box::new(crate::discovery::SnmpRoundTrip),
     ]
 }
 

@@ -44,11 +44,14 @@
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
+pub mod broker;
 pub mod budget;
 pub mod claim;
 pub mod collect;
 pub mod contracts;
 pub mod daily;
+pub mod discovery;
+pub mod factory;
 pub mod fault;
 pub mod furious;
 pub mod identity;
@@ -62,6 +65,7 @@ pub mod roundtrip;
 pub mod schedule;
 pub mod secretary;
 pub mod standing;
+pub mod storage;
 mod support;
 pub mod telemetry;
 pub mod verdict;

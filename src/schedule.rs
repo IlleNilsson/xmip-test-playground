@@ -46,7 +46,7 @@ impl Tally {
 /// Every contract the playground exercises today: the three local shapes and
 /// every contract technology the estate has landed. ADR-0028's matrix is every
 /// transport by every one of these.
-pub const CONTRACTS: [Contract; 19] = [
+pub const CONTRACTS: [Contract; 20] = [
     Contract::Bytes,
     Contract::Text,
     Contract::Json,
@@ -66,6 +66,7 @@ pub const CONTRACTS: [Contract; 19] = [
     Contract::Wsdl,
     Contract::OpenApi,
     Contract::AsyncApi,
+    Contract::Sql,
 ];
 
 /// A scheduled exercise of the estate's transports over the message path. Holds

@@ -31,6 +31,7 @@ use contract_openapi::OpenApi;
 use contract_protobuf::Protobuf;
 use contract_regex::RegexContract;
 use contract_schematron::Schematron;
+use contract_sql::SqlContract;
 use contract_wsdl::Wsdl;
 use contract_xml_schema::XmlSchema;
 use stream::Stream;
@@ -58,6 +59,7 @@ impl Contract {
             Contract::Wsdl => "application/wsdl+xml",
             Contract::OpenApi => "application/vnd.oai.openapi+json",
             Contract::AsyncApi => "application/vnd.aai.asyncapi+json",
+            Contract::Sql => "application/sql",
         }
     }
 }
@@ -113,6 +115,7 @@ impl ContractTrait for ContentContract {
             Contract::Wsdl => return Wsdl::new().validate(stream),
             Contract::OpenApi => return OpenApi::new().validate(stream),
             Contract::AsyncApi => return AsyncApi::new().validate(stream),
+            Contract::Sql => return SqlContract::new().validate(stream),
             Contract::Bytes | Contract::Text | Contract::Html => {}
         }
         let issues = check(self.contract, stream.bytes());
@@ -152,7 +155,8 @@ fn check(contract: Contract, bytes: &[u8]) -> Vec<ValidationIssue> {
         | Contract::Protobuf
         | Contract::Wsdl
         | Contract::OpenApi
-        | Contract::AsyncApi => Vec::new(),
+        | Contract::AsyncApi
+        | Contract::Sql => Vec::new(),
         Contract::Text => match std::str::from_utf8(bytes) {
             Ok(_) => Vec::new(),
             Err(error) => vec![issue(format!("not valid UTF-8: {error}"))],

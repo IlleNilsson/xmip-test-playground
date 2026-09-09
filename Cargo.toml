@@ -54,6 +54,22 @@ transport_imap = { package = "xmip-core-transport-imap", git = "https://github.c
 transport_redis_streams = { package = "xmip-core-transport-redis-streams", git = "https://github.com/IlleNilsson/xmip-core-transport-redis-streams", branch = "main" }
 transport_pop3 = { package = "xmip-core-transport-pop3", git = "https://github.com/IlleNilsson/xmip-core-transport-pop3", branch = "main" }
 transport_ftp = { package = "xmip-core-transport-ftp", git = "https://github.com/IlleNilsson/xmip-core-transport-ftp", branch = "main" }
+transport_cotp = { package = "xmip-core-transport-cotp", git = "https://github.com/IlleNilsson/xmip-core-transport-cotp", branch = "main" }
+transport_s7comm = { package = "xmip-core-transport-s7comm", git = "https://github.com/IlleNilsson/xmip-core-transport-s7comm", branch = "main" }
+transport_secs_gem = { package = "xmip-core-transport-secs-gem", git = "https://github.com/IlleNilsson/xmip-core-transport-secs-gem", branch = "main" }
+transport_snmp = { package = "xmip-core-transport-snmp", git = "https://github.com/IlleNilsson/xmip-core-transport-snmp", branch = "main" }
+transport_ssdp = { package = "xmip-core-transport-ssdp", git = "https://github.com/IlleNilsson/xmip-core-transport-ssdp", branch = "main" }
+transport_mdns = { package = "xmip-core-transport-mdns", git = "https://github.com/IlleNilsson/xmip-core-transport-mdns", branch = "main" }
+transport_dhcp = { package = "xmip-core-transport-dhcp", git = "https://github.com/IlleNilsson/xmip-core-transport-dhcp", branch = "main" }
+transport_webdav = { package = "xmip-core-transport-webdav", git = "https://github.com/IlleNilsson/xmip-core-transport-webdav", branch = "main" }
+transport_activemq = { package = "xmip-core-transport-activemq", git = "https://github.com/IlleNilsson/xmip-core-transport-activemq", branch = "main" }
+transport_rabbitmq = { package = "xmip-core-transport-rabbitmq", git = "https://github.com/IlleNilsson/xmip-core-transport-rabbitmq", branch = "main" }
+transport_nats_jetstream = { package = "xmip-core-transport-nats-jetstream", git = "https://github.com/IlleNilsson/xmip-core-transport-nats-jetstream", branch = "main" }
+transport_redpanda = { package = "xmip-core-transport-redpanda", git = "https://github.com/IlleNilsson/xmip-core-transport-redpanda", branch = "main" }
+transport_postgresql = { package = "xmip-core-transport-postgresql", git = "https://github.com/IlleNilsson/xmip-core-transport-postgresql", branch = "main" }
+transport_s3 = { package = "xmip-core-transport-s3", git = "https://github.com/IlleNilsson/xmip-core-transport-s3", branch = "main" }
+transport_azure_blob = { package = "xmip-core-transport-azure-blob", git = "https://github.com/IlleNilsson/xmip-core-transport-azure-blob", branch = "main" }
+transport_google_cloud_storage = { package = "xmip-core-transport-google-cloud-storage", git = "https://github.com/IlleNilsson/xmip-core-transport-google-cloud-storage", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
@@ -98,6 +114,7 @@ contract_asyncapi = { package = "xmip-core-contract-asyncapi", git = "https://gi
 contract_openapi = { package = "xmip-core-contract-openapi", git = "https://github.com/IlleNilsson/xmip-core-contract-openapi", branch = "main" }
 contract_wsdl = { package = "xmip-core-contract-wsdl", git = "https://github.com/IlleNilsson/xmip-core-contract-wsdl", branch = "main" }
 contract_graphql_schema = { package = "xmip-core-contract-graphql-schema", git = "https://github.com/IlleNilsson/xmip-core-contract-graphql-schema", branch = "main" }
+contract_sql = { package = "xmip-core-contract-sql", git = "https://github.com/IlleNilsson/xmip-core-contract-sql", branch = "main" }
 
 # The snapshot and history files are written in TOML: on disk is TOML across the
 # estate, JSON is reserved for memory and the wire (the owner's rule). serde

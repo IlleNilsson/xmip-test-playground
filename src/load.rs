@@ -320,6 +320,15 @@ fn large_payload(contract: Contract, target: usize) -> Vec<u8> {
         Contract::Wsdl => large_wsdl(target),
         Contract::OpenApi => large_openapi(target),
         Contract::AsyncApi => large_asyncapi(target),
+        Contract::Sql => wrap_to(
+            "BEGIN;
+",
+            "INSERT INTO probe (n, ping) VALUES (1, 'heavy row');
+",
+            "COMMIT;
+",
+            target,
+        ),
     }
 }
 

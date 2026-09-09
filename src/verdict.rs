@@ -59,6 +59,8 @@ pub enum Contract {
     OpenApi,
     /// An `AsyncAPI` description, the `asyncapi` contract technology.
     AsyncApi,
+    /// A SQL script, the `sql` contract technology.
+    Sql,
 }
 
 /// One WSDL 1.1 description of a single service: the WSDL probe.
@@ -168,6 +170,7 @@ impl Contract {
             Contract::Wsdl => "wsdl",
             Contract::OpenApi => "openapi",
             Contract::AsyncApi => "asyncapi",
+            Contract::Sql => "sql",
         }
     }
 
@@ -197,6 +200,7 @@ impl Contract {
             Contract::Wsdl => WSDL_PROBE.to_vec(),
             Contract::OpenApi => OPENAPI_PROBE.to_vec(),
             Contract::AsyncApi => ASYNCAPI_PROBE.to_vec(),
+            Contract::Sql => b"INSERT INTO probe (n, ping) VALUES (1, 'ping-pong');".to_vec(),
         }
     }
 
