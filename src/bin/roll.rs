@@ -10,6 +10,8 @@
 //!   - **load** — a megabyte per pair; does it arrive whole and still validate.
 //!   - **secretary** — retention and archiving: retain, then archive by age
 //!     (Xmip does not delete, ADR-0040).
+//!   - **filing** — every archive technology by every contract: file a probe
+//!     item through the real store and restore it whole.
 //!   - **claim** — exclusive pickup: one holder per item under contention, per
 //!     execution style (sequential, parallel, concurrent).
 //!   - **daily** — drain a backlog as fast as possible; tweak, then add a node.
@@ -38,7 +40,7 @@ use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
 use xmip_test_playground::{
-    Budget, Claim, Daily, FaultPlan, Furious, Load, Schedule, Secretary, activity_toml,
+    Budget, Claim, Daily, FaultPlan, Filing, Furious, Load, Schedule, Secretary, activity_toml,
     history_toml, to_toml, write_atomic,
 };
 
@@ -58,6 +60,7 @@ fn main() {
         .under_pressure()
         .with_bytes(load_bytes());
     let mut secretary = Secretary::new(format!("{root}/secretary")).under_pressure();
+    let mut filing = Filing::new(format!("{root}/filing"), base.join("filing")).under_pressure();
     let mut claim = Claim::new(format!("{root}/claim"), base.join("claim")).under_pressure();
     let mut daily = Daily::new(format!("{root}/daily"), base.join("daily"));
 
@@ -86,6 +89,7 @@ fn main() {
         merge(&mut snapshot, &furious.tick());
         merge(&mut snapshot, &load.tick());
         merge(&mut snapshot, &secretary.tick(budget.simulated_elapsed()));
+        merge(&mut snapshot, &filing.tick());
         merge(&mut snapshot, &claim.tick());
         merge(&mut snapshot, &daily.tick());
 

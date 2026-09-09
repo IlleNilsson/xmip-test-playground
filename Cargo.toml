@@ -70,6 +70,8 @@ transport_postgresql = { package = "xmip-core-transport-postgresql", git = "http
 transport_s3 = { package = "xmip-core-transport-s3", git = "https://github.com/IlleNilsson/xmip-core-transport-s3", branch = "main" }
 transport_azure_blob = { package = "xmip-core-transport-azure-blob", git = "https://github.com/IlleNilsson/xmip-core-transport-azure-blob", branch = "main" }
 transport_google_cloud_storage = { package = "xmip-core-transport-google-cloud-storage", git = "https://github.com/IlleNilsson/xmip-core-transport-google-cloud-storage", branch = "main" }
+transport_mssql = { package = "xmip-core-transport-mssql", git = "https://github.com/IlleNilsson/xmip-core-transport-mssql", branch = "main" }
+transport_mysql = { package = "xmip-core-transport-mysql", git = "https://github.com/IlleNilsson/xmip-core-transport-mysql", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
@@ -94,6 +96,21 @@ context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson
 # over a logical clock, so an item's lifecycle is exercised, not mocked.
 retain = { package = "xmip-core-retain", git = "https://github.com/IlleNilsson/xmip-core-retain", branch = "main" }
 archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main" }
+
+# The archive technologies the filing scenario drives, one repository per
+# store (ADR-0010), each mounted under the archive capability. Four keep an
+# item under a directory; four talk to a server, and the playground binds the
+# sibling transport's own Session as that server on loopback.
+archive_parquet = { package = "xmip-core-archive-parquet", git = "https://github.com/IlleNilsson/xmip-core-archive-parquet", branch = "main" }
+archive_sqlite = { package = "xmip-core-archive-sqlite", git = "https://github.com/IlleNilsson/xmip-core-archive-sqlite", branch = "main" }
+archive_file = { package = "xmip-core-archive-file", git = "https://github.com/IlleNilsson/xmip-core-archive-file", branch = "main" }
+archive_sql = { package = "xmip-core-archive-sql", git = "https://github.com/IlleNilsson/xmip-core-archive-sql", branch = "main" }
+archive_postgresql = { package = "xmip-core-archive-postgresql", git = "https://github.com/IlleNilsson/xmip-core-archive-postgresql", branch = "main" }
+archive_s3 = { package = "xmip-core-archive-s3", git = "https://github.com/IlleNilsson/xmip-core-archive-s3", branch = "main" }
+archive_azure_blob = { package = "xmip-core-archive-azure-blob", git = "https://github.com/IlleNilsson/xmip-core-archive-azure-blob", branch = "main" }
+archive_gcs = { package = "xmip-core-archive-gcs", git = "https://github.com/IlleNilsson/xmip-core-archive-gcs", branch = "main" }
+archive_mssql = { package = "xmip-core-archive-mssql", git = "https://github.com/IlleNilsson/xmip-core-archive-mssql", branch = "main" }
+archive_mysql = { package = "xmip-core-archive-mysql", git = "https://github.com/IlleNilsson/xmip-core-archive-mysql", branch = "main" }
 
 # The content technologies the probes validate through, so a pair is delivered
 # only if the estate's own contract held — not a stand-in parser in the

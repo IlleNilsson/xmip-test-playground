@@ -1,5 +1,6 @@
 //! Small helpers shared across the scenarios: the wall clock every scenario
-//! stamps its records with, and — for tests — a scratch directory.
+//! stamps its records with, and — for tests — a scratch directory and the
+//! one judgement every cabinet is held to.
 //!
 //! `now_unix_nanos` lived in `schedule.rs` and five other scenarios reached into
 //! it; it belongs in a neutral place, not in one scenario's module.
@@ -24,4 +25,27 @@ pub(crate) fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("xmip-play-{name}-{}", now_unix_nanos()));
     std::fs::remove_dir_all(&dir).ok();
     dir
+}
+
+/// A short, a long and an empty payload, each filed through `cabinet` and
+/// returned whole. Shared by `cabinet.rs` and `remote.rs`, so every archive
+/// technology is judged the same way.
+#[cfg(test)]
+pub(crate) fn files_whole(cabinet: &dyn crate::cabinet::Cabinet) {
+    use crate::cabinet::Filed;
+    let payloads = [b"filed".to_vec(), vec![0x2a; 3_000], Vec::new()];
+    for (n, bytes) in payloads.into_iter().enumerate() {
+        let item = archive::ArchiveItem {
+            data_type: "bytes".to_string(),
+            identifier: format!("{n}-bytes"),
+            bytes,
+            metadata: vec![("source".to_string(), "playground".to_string())],
+        };
+        assert_eq!(
+            cabinet.file(item.clone()),
+            Filed::Returned(item),
+            "{} files payload {n} whole",
+            cabinet.technology()
+        );
+    }
 }

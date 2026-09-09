@@ -37,6 +37,9 @@
 //!   - **secretary** — retention and archiving: retain, then archive by age,
 //!     driving the real retention policy and archive store. Xmip does not delete
 //!     (ADR-0040).
+//!   - **filing** — the archive axis: every archive technology, by every
+//!     contract, files a probe item through the real store and restores it
+//!     whole, each behind one [`Cabinet`] adapter.
 //!   - **claim** — exclusive pickup: one holder per item under contention, per
 //!     execution style (sequential, parallel, concurrent).
 //!   - **daily** — drain a backlog as fast as possible; tweak, then add a node.
@@ -46,13 +49,16 @@
 
 pub mod broker;
 pub mod budget;
+pub mod cabinet;
 pub mod claim;
 pub mod collect;
 pub mod contracts;
 pub mod daily;
+pub mod database;
 pub mod discovery;
 pub mod factory;
 pub mod fault;
+pub mod filing;
 pub mod furious;
 pub mod identity;
 pub mod industrial;
@@ -60,6 +66,7 @@ pub mod load;
 pub mod messaging;
 pub mod pingpong;
 pub mod record;
+pub mod remote;
 pub mod report;
 pub mod roundtrip;
 pub mod schedule;
@@ -71,10 +78,12 @@ pub mod telemetry;
 pub mod verdict;
 
 pub use budget::Budget;
+pub use cabinet::{Cabinet, Filed, all_cabinets};
 pub use claim::Claim;
 pub use contracts::ContentContract;
 pub use daily::Daily;
 pub use fault::{Fault, FaultKind, FaultPlan};
+pub use filing::Filing;
 pub use furious::Furious;
 pub use identity::{IdentityFaults, Step};
 pub use load::Load;
