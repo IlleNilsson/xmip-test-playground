@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 
 use transport::Transport;
 use transport::error::protocol_error;
+use transport_dns::{Carrier, MAX_MESSAGE};
 use transport_dns::{DnsTransport, Message, UDP_EDNS, message};
 use transport_redis_streams::RedisStreamsTransport;
 
@@ -71,8 +72,10 @@ fn dns_ceiling() -> usize {
 }
 
 /// DNS: bind a server for one zone, send an update adding a TXT record that
-/// carries the payload, and take the update's payload as what came back. A
-/// payload over the ceiling is refused before anything waits on it.
+/// carries the payload, and take the update's payload as what came back.
+/// Under the datagram ceiling the update travels as UDP with EDNS; above it,
+/// as TCP with a length prefix, which is what a resolver does too (RFC 7766).
+/// The ceiling is then the message's own sixteen-bit length.
 pub struct DnsRoundTrip;
 
 impl RoundTrip for DnsRoundTrip {
@@ -81,37 +84,83 @@ impl RoundTrip for DnsRoundTrip {
     }
 
     fn ceiling(&self) -> Option<usize> {
-        Some(dns_ceiling())
+        Some(tcp_ceiling())
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        if payload.len() > dns_ceiling() {
+        if payload.len() > tcp_ceiling() {
             return Exchange::Failed(format!(
-                "{} bytes is over the {} one update carries in a datagram",
+                "{} bytes is over the {} one update carries in a message",
                 payload.len(),
-                dns_ceiling()
+                tcp_ceiling()
             ));
         }
-        let far_end = DnsTransport::new("127.0.0.1:0", ZONE, NAME).timing_out_after(TIMEOUT);
-        let (socket, address) = match far_end.bind_udp() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-        let payload = payload.to_vec();
-        let timeout = TIMEOUT;
-        let sender = std::thread::spawn(move || {
-            DnsTransport::new("127.0.0.1:0", ZONE, NAME)
-                .timing_out_after(timeout)
-                .send(&address, &payload)
-        });
-        let received = far_end.receive_datagram(&socket);
-        match (received, sender.join()) {
-            (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
-            (_, Ok(Err(error))) => Exchange::Failed(format!("update failed: {error}")),
-            (Err(error), _) => Exchange::Failed(format!("receive failed: {error}")),
-            (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
+        if payload.len() <= dns_ceiling() {
+            return over_udp(payload);
         }
+        over_tcp(payload)
     }
+}
+
+fn over_udp(payload: &[u8]) -> Exchange {
+    let far_end = DnsTransport::new("127.0.0.1:0", ZONE, NAME).timing_out_after(TIMEOUT);
+    let (socket, address) = match far_end.bind_udp() {
+        Ok(bound) => bound,
+        Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+    };
+    let payload = payload.to_vec();
+    let timeout = TIMEOUT;
+    let sender = std::thread::spawn(move || {
+        DnsTransport::new("127.0.0.1:0", ZONE, NAME)
+            .timing_out_after(timeout)
+            .send(&address, &payload)
+    });
+    judge(far_end.receive_datagram(&socket), sender.join())
+}
+
+fn over_tcp(payload: &[u8]) -> Exchange {
+    let far_end = DnsTransport::new("127.0.0.1:0", ZONE, NAME).timing_out_after(TIMEOUT);
+    let (listener, address) = match far_end.bind_tcp() {
+        Ok(bound) => bound,
+        Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
+    };
+    let payload = payload.to_vec();
+    let timeout = TIMEOUT;
+    let sender = std::thread::spawn(move || {
+        DnsTransport::new("127.0.0.1:0", ZONE, NAME)
+            .over(Carrier::Tcp)
+            .timing_out_after(timeout)
+            .send(&address, &payload)
+    });
+    judge(far_end.receive_connection(&listener), sender.join())
+}
+
+fn judge(
+    received: transport::Result<transport::Arrived>,
+    sent: std::thread::Result<transport::Result<()>>,
+) -> Exchange {
+    match (received, sent) {
+        (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
+        (_, Ok(Err(error))) => Exchange::Failed(format!("update failed: {error}")),
+        (Err(error), _) => Exchange::Failed(format!("receive failed: {error}")),
+        (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
+    }
+}
+
+/// The most one update carries as a TCP message: the largest message whose
+/// length still fits the sixteen-bit prefix.
+fn tcp_ceiling() -> usize {
+    static CEILING: OnceLock<usize> = OnceLock::new();
+    *CEILING.get_or_init(|| {
+        let fits = |bytes: usize| {
+            let update = Message::update_adding_txt(0, ZONE, NAME, &vec![0; bytes]);
+            message::encode(&update).is_ok_and(|wire| wire.len() <= MAX_MESSAGE)
+        };
+        (0..=MAX_MESSAGE)
+            .rev()
+            .find(|&bytes| fits(bytes))
+            .unwrap_or(0)
+    })
 }
 
 #[cfg(test)]
@@ -152,9 +201,13 @@ mod tests {
             "{}",
             dns_ceiling()
         );
+        // The datagram's brim goes as UDP, one byte more as TCP, and past the
+        // message's own length nothing goes.
         let brim = crate::stress::patterned(dns_ceiling());
         assert_eq!(returned(&DnsRoundTrip, &brim), brim);
-        let over = vec![0u8; dns_ceiling() + 1];
-        assert!(matches!(DnsRoundTrip.exchange(&over), Exchange::Failed(_)));
+        let over = crate::stress::patterned(dns_ceiling() + 1);
+        assert_eq!(returned(&DnsRoundTrip, &over), over);
+        let past = vec![0u8; tcp_ceiling() + 1];
+        assert!(matches!(DnsRoundTrip.exchange(&past), Exchange::Failed(_)));
     }
 }

@@ -17,25 +17,6 @@ use transport_websocket::WebSocketTransport;
 
 use crate::roundtrip::{Exchange, RoundTrip, TIMEOUT, listen_exchange};
 
-/// Why a mail path cannot carry `payload` as it is: DATA is lines ending in
-/// CRLF with a leading period stuffed, so a bare LF becomes CRLF on the way
-/// (a lone CR inside a line survives, which is why HL7 v2 travels). Text
-/// mail survives; bytes with bare LFs do not, and the adapter says so rather
-/// than calling a changed payload delivered.
-pub(crate) fn mail_refusal(payload: &[u8]) -> Option<String> {
-    let mut at = 0;
-    while at < payload.len() {
-        match payload[at] {
-            b'\r' if payload.get(at + 1) == Some(&b'\n') => at += 2,
-            b'\n' => {
-                return Some("a bare LF is canonicalised to CRLF by DATA".to_string());
-            }
-            _ => at += 1,
-        }
-    }
-    None
-}
-
 /// MLLP: bind a listener, send one framed message from another thread, accept
 /// it, acknowledge on the same connection, and read the message back. The tcp
 /// shape with HL7's framing on top and the acknowledgement the sender waits for.
@@ -132,17 +113,6 @@ impl Default for SmtpRoundTrip {
 impl RoundTrip for SmtpRoundTrip {
     fn transport(&self) -> &'static str {
         "smtp"
-    }
-
-    /// The mail path's line rule, and one more of SMTP's own: the CRLF that
-    /// ends the last line belongs to the `<CRLF>.<CRLF>` terminator, so a
-    /// body ending in CRLF comes back one line ending short.
-    fn refuses(&self, payload: &[u8]) -> Option<String> {
-        mail_refusal(payload).or_else(|| {
-            payload
-                .ends_with(b"\r\n")
-                .then(|| "a trailing CRLF is absorbed by the DATA terminator".to_string())
-        })
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
