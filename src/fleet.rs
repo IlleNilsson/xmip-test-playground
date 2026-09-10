@@ -28,6 +28,7 @@ use observe::{Health, HealthRecord, Snapshot};
 use crate::report::from_toml;
 use crate::stress::Stress;
 use crate::support::now_unix_nanos;
+use crate::switch::Switches;
 
 /// Where every playground scenario publishes.
 pub const ROOT: &str = "xmip:///playground";
@@ -128,6 +129,7 @@ impl Fleet {
         Command::new(&self.binary)
             .args(["--name", name, "--stress", self.stress.name()])
             .args(["--rounds", &self.rounds.to_string()])
+            .args(Switches::from_env().flags())
             .arg("--shared")
             .arg(&self.shared)
             .arg("--snapshot")

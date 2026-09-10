@@ -79,6 +79,7 @@ pub mod storage;
 pub mod storm;
 pub mod stress;
 mod support;
+pub mod switch;
 pub mod telemetry;
 pub mod verdict;
 
@@ -99,4 +100,6 @@ pub use roundtrip::{Exchange, FileRoundTrip, RoundTrip, TcpRoundTrip, UdpRoundTr
 pub use schedule::{CONTRACTS, Schedule};
 pub use secretary::Secretary;
 pub use stress::Stress;
+pub use support::now_unix_nanos;
+pub use switch::Switches;
 pub use verdict::{Contract, Outcome, Stage, Verdict};

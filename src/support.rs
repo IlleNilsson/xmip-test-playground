@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Now, in unix nanoseconds, saturating rather than failing before the epoch or
 /// past `i64`.
 #[must_use]
-pub(crate) fn now_unix_nanos() -> i64 {
+pub fn now_unix_nanos() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| {

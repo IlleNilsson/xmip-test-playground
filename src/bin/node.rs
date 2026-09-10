@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! node --name <name> --shared <dir> --stress <level> --rounds <n> --snapshot <path>
-//!      [--interval-ms <ms>]
+//!      [--interval-ms <ms>] [--online true|false]
 //! ```
 //!
 //! It runs, in-process, the **claim** and **daily** scenarios over a directory
@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use observe::Snapshot;
 use xmip_test_playground::fleet::{ROOT, merge};
-use xmip_test_playground::{Claim, Daily, Stress, to_toml, write_atomic};
+use xmip_test_playground::{Claim, Daily, Stress, Switches, to_toml, write_atomic};
 
 /// What the command line said.
 struct Arguments {
@@ -37,6 +37,9 @@ struct Arguments {
     rounds: u64,
     snapshot: PathBuf,
     interval: Duration,
+    /// ADR-0045: whether this node may assume the internet. Published in
+    /// its own health record, so a fleet's board shows it per node.
+    online: bool,
 }
 
 fn main() -> ExitCode {
@@ -68,6 +71,7 @@ fn main() -> ExitCode {
         let mut snapshot = Snapshot::new();
         merge(&mut snapshot, &claim.tick());
         merge(&mut snapshot, &daily.tick());
+        snapshot.record_health(switch_record(&node, arguments.online));
 
         if let Err(error) = write_atomic(&arguments.snapshot, &to_toml(&node, &snapshot)) {
             eprintln!(
@@ -93,6 +97,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Arguments, String> {
     let mut rounds = None;
     let mut snapshot = None;
     let mut interval = Duration::from_millis(250);
+    let mut online = false;
 
     let mut args = args.peekable();
     while let Some(flag) = args.next() {
@@ -106,6 +111,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Arguments, String> {
             "--rounds" => rounds = Some(number(&flag, &value)?),
             "--snapshot" => snapshot = Some(PathBuf::from(value)),
             "--interval-ms" => interval = Duration::from_millis(number(&flag, &value)?),
+            "--online" => {
+                online = xmip_test_playground::switch::parse(&value)
+                    .ok_or(format!("--online wants true or false, not {value}"))?;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -117,7 +126,22 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Arguments, String> {
         rounds: rounds.ok_or("--rounds is required")?,
         snapshot: snapshot.ok_or("--snapshot is required")?,
         interval,
+        online,
     })
+}
+
+/// The node's `online` switch as one health record under its scope:
+/// always fine, its evidence the word, so the fleet's board shows which
+/// emulated nodes may assume the internet (ADR-0045, none by default).
+fn switch_record(node: &str, online: bool) -> observe::HealthRecord {
+    let switches = Switches { online };
+    observe::HealthRecord {
+        scope: format!("{node}/switch"),
+        health: observe::Health::Fine,
+        severity: 0,
+        evidence: format!("{}; the estate's tests run offline", switches.word()),
+        observed_unix_nanos: xmip_test_playground::now_unix_nanos(),
+    }
 }
 
 fn number(flag: &str, value: &str) -> Result<u64, String> {
