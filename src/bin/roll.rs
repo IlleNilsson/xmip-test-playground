@@ -33,21 +33,31 @@
 //! one summary line per round is appended. After every tick the snapshot,
 //! history and activity are written to the TOML files the monitoring GUI reads,
 //! overridable with `XMIP_PLAYGROUND_SNAPSHOT`, `_HISTORY`, `_ACTIVITY`.
+//!
+//! **The fleet.** When `XMIP_PLAYGROUND_NODES` is set — a count, or empty for
+//! the level's own — or `XMIP_PLAYGROUND_STRESS` is `harsh` or `brutal`, the
+//! roll spawns a fleet of node processes beside the in-process scenarios and
+//! merges their snapshot each round (ADR-0028 clause 2). The board shows the
+//! fleet's rollup row, and a node's leaf only when it is not fine. Unset, no
+//! process is spawned and the roll is what it was.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
+use xmip_test_playground::fleet::{Fleet, merge, node_binary};
 use xmip_test_playground::{
-    Budget, Claim, Daily, FaultPlan, Filing, Furious, Load, Schedule, Secretary, activity_toml,
-    history_toml, to_toml, write_atomic,
+    Budget, Claim, Daily, FaultPlan, Filing, Furious, Load, Schedule, Secretary, Stress,
+    activity_toml, history_toml, to_toml, write_atomic,
 };
 
 fn main() {
     let root = "xmip:///playground";
     let base = std::env::temp_dir().join("playground");
     std::fs::remove_dir_all(&base).ok();
+    let stress = Stress::from_env();
+    let mut fleet = spawn_fleet(stress, &base);
 
     // Each scenario under its own subtree, each with faults or pressure on, so
     // the board is realistic rather than uniformly green. `file` stays clean in
@@ -92,6 +102,9 @@ fn main() {
         merge(&mut snapshot, &filing.tick());
         merge(&mut snapshot, &claim.tick());
         merge(&mut snapshot, &daily.tick());
+        if let Some(fleet) = fleet.as_mut() {
+            merge(&mut snapshot, &fleet.tick());
+        }
 
         history.record(&snapshot);
 
@@ -116,17 +129,33 @@ fn main() {
         std::thread::sleep(real);
     }
 
+    if let Some(mut fleet) = fleet {
+        fleet.stop();
+    }
     std::fs::remove_dir_all(&base).ok();
 }
 
-/// Copy every health record and count from one scenario's snapshot into the
-/// combined one. Scopes are disjoint per scenario, so nothing collides.
-fn merge(into: &mut Snapshot, from: &Snapshot) {
-    for record in from.health_records() {
-        into.record_health(record.clone());
+/// The fleet a roll wants, if any: `XMIP_PLAYGROUND_NODES` names a count (or,
+/// empty, the level's own), and `harsh` or `brutal` spawn one unasked. A fleet
+/// that cannot start is said so and the roll goes on without it.
+fn spawn_fleet(stress: Stress, base: &Path) -> Option<Fleet> {
+    let nodes = std::env::var("XMIP_PLAYGROUND_NODES").ok();
+    if nodes.is_none() && stress < Stress::Harsh {
+        return None;
     }
-    for count in from.all_counts() {
-        into.record_count(count.clone());
+    let count = nodes
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .unwrap_or_else(|| stress.nodes());
+    let shared = base.join("fleet/shared");
+    let snapshots = base.join("fleet/snapshots");
+    let spawned = node_binary()
+        .and_then(|binary| Fleet::spawn_binary(&binary, stress, count, &shared, &snapshots, 0));
+    match spawned {
+        Ok(fleet) => Some(fleet),
+        Err(error) => {
+            eprintln!("no fleet: {error}");
+            None
+        }
     }
 }
 
@@ -230,8 +259,13 @@ fn summarise(node: &str, round: u64, snapshot: &Snapshot) {
     println!("round {round:>4}: {worst}  ({count} leaves){trouble}");
 }
 
+/// The rows the board shows: every leaf, except that a fleet node's leaves
+/// appear only when not fine — the fleet's own row always does, and an
+/// operator drills into a node from there.
 fn pairs(node: &str, snapshot: &Snapshot) -> Vec<observe::HealthRecord> {
+    let nodes = format!("{node}/node/");
     let mut records = snapshot.health(node);
+    records.retain(|record| !record.scope.starts_with(&nodes) || record.health != Health::Fine);
     records.sort_by(|left, right| left.scope.cmp(&right.scope));
     records
 }

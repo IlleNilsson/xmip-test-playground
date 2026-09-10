@@ -13,7 +13,16 @@
 //! The backlog is real files in a directory: each round drops arrivals and
 //! removes up to the current capacity, so the queue depth an operator watches is
 //! a real count on disk, not a number in memory.
+//!
+//! **Across processes, 2026-09-09.** A [`Daily::shared`] drain works a directory
+//! other node processes drop into and drain from at the same time. Its own
+//! arrivals carry its process id, so the directory tells how many nodes are
+//! feeding it, and the node judges its *share* of the backlog — the depth
+//! divided by the feeders — so ten nodes over one directory escalate the way one
+//! node over its own does. A file another node removed first is a lost race,
+//! and the drain takes the next one (ADR-0024 clause 7).
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use observe::{Count, Counted, Snapshot};
@@ -28,7 +37,8 @@ const PER_READER: usize = 5;
 /// Readers per node before and after the tweak.
 const BASE_READERS: usize = 2;
 const TWEAK_READERS: usize = 4;
-/// Backlog at which each remedy kicks in, and the depth that is a red SLA breach.
+/// Backlog share at which each remedy kicks in, and the depth that is a red SLA
+/// breach.
 const TWEAK_AT: usize = 35;
 const SCALE_AT: usize = 55;
 const CEILING: usize = 150;
@@ -38,9 +48,11 @@ const CEILING: usize = 150;
 pub struct Daily {
     node: String,
     dir: PathBuf,
+    tag: String,
     round: u64,
     seq: u64,
     backlog: usize,
+    feeders: usize,
     previous: usize,
     drained: u64,
     readers: usize,
@@ -53,18 +65,29 @@ pub struct Daily {
 
 impl Daily {
     /// A drain publishing under `node`, using `dir` for the backlog, starting at
-    /// one node with the base concurrency.
+    /// one node with the base concurrency. The directory is this drain's own
+    /// and starts empty.
     #[must_use]
     pub fn new(node: impl Into<String>, dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         std::fs::remove_dir_all(&dir).ok();
+        Self::shared(node, dir)
+    }
+
+    /// The same drain over a directory other node processes feed and drain
+    /// too. Nothing already in it is touched at start; it is theirs.
+    #[must_use]
+    pub fn shared(node: impl Into<String>, dir: impl Into<PathBuf>) -> Self {
+        let dir = dir.into();
         std::fs::create_dir_all(&dir).ok();
         Self {
             node: node.into(),
             dir,
+            tag: std::process::id().to_string(),
             round: 0,
             seq: 0,
             backlog: 0,
+            feeders: 1,
             previous: 0,
             drained: 0,
             readers: BASE_READERS,
@@ -86,26 +109,30 @@ impl Daily {
         let capacity = self.nodes * self.readers * PER_READER;
         let processed = drain(&self.dir, capacity);
         self.drained += processed as u64;
-        self.backlog = count(&self.dir);
+        (self.backlog, self.feeders) = measure(&self.dir);
+        let share = self.backlog / self.feeders.max(1);
 
-        self.escalate();
+        self.escalate(share);
 
-        let mark = if self.backlog > CEILING {
+        let mark = if share > CEILING {
             Mark::Fail
-        } else if self.backlog < self.previous {
-            Mark::Pass
-        } else if self.backlog > self.previous {
+        } else if share > self.previous {
             Mark::Warn
         } else {
             Mark::Pass
         };
         let config = format!("{} node(s) x {} readers", self.nodes, self.readers);
+        let feeders = if self.feeders > 1 {
+            format!(" over {} feeders, {share} each", self.feeders)
+        } else {
+            String::new()
+        };
         let evidence = format!(
-            "backlog {} ({processed}/round, capacity {capacity}, {config}){}",
+            "backlog {}{feeders} ({processed}/round, capacity {capacity}, {config}){}",
             self.backlog, self.action
         );
         self.standing.record(mark, evidence);
-        self.previous = self.backlog;
+        self.previous = share;
 
         let mut snapshot = Snapshot::new();
         snapshot.record_health(self.standing.health(&format!("{}/drain", self.node), now));
@@ -113,21 +140,22 @@ impl Daily {
         snapshot
     }
 
+    /// Drop the round's arrivals, each named for the process that fed it.
     fn arrive(&mut self) {
         for _ in 0..ARRIVAL {
             self.seq += 1;
-            let path = self.dir.join(format!("daily_{:08}", self.seq));
+            let path = self.dir.join(format!("daily_{}_{:08}", self.tag, self.seq));
             std::fs::write(&path, b"x").ok();
         }
     }
 
     /// Raise concurrency first; add a node only if the tweak was not enough.
-    fn escalate(&mut self) {
-        if !self.tweaked && self.backlog > TWEAK_AT {
+    fn escalate(&mut self, share: usize) {
+        if !self.tweaked && share > TWEAK_AT {
             self.readers = TWEAK_READERS;
             self.tweaked = true;
             self.action = " — raised concurrency (tweak)";
-        } else if self.tweaked && !self.scaled && self.backlog > SCALE_AT {
+        } else if self.tweaked && !self.scaled && share > SCALE_AT {
             self.nodes += 1;
             self.scaled = true;
             self.action = " — added a node";
@@ -151,13 +179,17 @@ impl Daily {
     }
 }
 
-/// Remove up to `capacity` files, returning how many were drained.
+/// Remove up to `capacity` files, returning how many were drained. A file
+/// another process removed first does not count; the next one is taken.
 fn drain(dir: &Path, capacity: usize) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
     let mut processed = 0;
-    for entry in entries.flatten().take(capacity) {
+    for entry in entries.flatten() {
+        if processed >= capacity {
+            break;
+        }
         if std::fs::remove_file(entry.path()).is_ok() {
             processed += 1;
         }
@@ -165,10 +197,25 @@ fn drain(dir: &Path, capacity: usize) -> usize {
     processed
 }
 
-fn count(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .map(|e| e.flatten().count())
-        .unwrap_or(0)
+/// The backlog: how many files wait, and how many processes fed them.
+fn measure(dir: &Path) -> (usize, usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    let mut backlog = 0;
+    let mut feeders = BTreeSet::new();
+    for entry in entries.flatten() {
+        backlog += 1;
+        let name = entry.file_name();
+        let name = name.to_str().unwrap_or_default();
+        if let Some(tag) = name
+            .strip_prefix("daily_")
+            .and_then(|rest| rest.split('_').next())
+        {
+            feeders.insert(tag.to_string());
+        }
+    }
+    (backlog, feeders.len())
 }
 
 #[cfg(test)]
@@ -206,8 +253,33 @@ mod tests {
             daily.tick();
         }
         assert!(
-            count(&dir) > 0,
+            measure(&dir).0 > 0,
             "the backlog is real files in the directory"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_shared_drain_judges_its_share_and_leaves_others_files_alone_at_start() {
+        let dir = scratch("shared-daily");
+        std::fs::create_dir_all(&dir).expect("dir");
+        for n in 0..40 {
+            std::fs::write(dir.join(format!("daily_other_{n:08}")), b"x").expect("a file");
+        }
+        let mut daily = Daily::shared("xmip:///playground/daily", &dir);
+        assert_eq!(
+            measure(&dir),
+            (40, 1),
+            "the other feeder's files survive start"
+        );
+
+        let snapshot = daily.tick();
+        let record = &snapshot.health("xmip:///playground/daily")[0];
+        assert_eq!(daily.feeders, 2, "two feeders are seen");
+        assert!(
+            record.evidence.contains("over 2 feeders"),
+            "the evidence names the feeders: {}",
+            record.evidence
         );
         std::fs::remove_dir_all(&dir).ok();
     }

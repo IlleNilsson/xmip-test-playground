@@ -70,6 +70,10 @@ impl RoundTrip for Pop3RoundTrip {
         "pop3"
     }
 
+    fn refuses(&self, payload: &[u8]) -> Option<String> {
+        crate::reply::mail_refusal(payload)
+    }
+
     fn exchange(&self, payload: &[u8]) -> Exchange {
         let far_end = Pop3Transport::new("127.0.0.1:0", login()).timing_out_after(TIMEOUT);
         let (listener, address) = match far_end.bind() {
@@ -180,5 +184,20 @@ mod tests {
         );
         assert_eq!(returned(&ImapRoundTrip, &long), long);
         assert_eq!(returned(&ImapRoundTrip, b""), b"");
+    }
+
+    #[test]
+    fn ftp_carries_the_edges() {
+        crate::support::carries_the_edges(&FtpRoundTrip);
+    }
+
+    #[test]
+    fn pop3_carries_the_edges() {
+        crate::support::carries_the_edges(&Pop3RoundTrip);
+    }
+
+    #[test]
+    fn imap_carries_the_edges() {
+        crate::support::carries_the_edges(&ImapRoundTrip);
     }
 }

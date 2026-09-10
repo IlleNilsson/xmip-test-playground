@@ -13,20 +13,35 @@
 //!
 //! Judged over time like the rest: a pair that carried the load last round but
 //! dropped it before reads yellow, not green.
+//!
+//! At a [`Stress`] level the drop rate scales with it and the payload follows
+//! it: the load's own size leads each cycle — the megabyte, or what
+//! [`Load::with_bytes`] set — and the level's edge sizes follow, so a hard
+//! round proves the transport at the sizes protocols break on as well as at
+//! scale. Pairs still run one at a time: peak memory is twice the payload,
+//! and at gigabytes that is not a thing to multiply by the cores.
+
+pub mod payload;
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 
 use observe::{Count, Counted, Snapshot};
-use stream::Stream;
-use xcore::StreamId;
 
 use crate::fault::fires_keyed;
 use crate::roundtrip::{Exchange, RoundTrip, all_transports};
 use crate::schedule::CONTRACTS;
 use crate::standing::{Mark, Standing};
+use crate::stress::{self, Stress, scaled_rate};
 use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
+
+pub use payload::as_stream;
+pub(crate) use payload::{filler, large_payload};
+
+/// How often, in percent of rounds at `Realistic`, a pressured transfer is
+/// dropped mid-flight.
+const DROP_RATE: u8 = 4;
 
 /// The default size of one load, in bytes. A megabyte: large enough that a UDP
 /// datagram cannot carry it and a real transfer is measurable, small enough that
@@ -48,7 +63,9 @@ pub struct Load {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
     bytes: usize,
-    under_pressure: bool,
+    /// The level, when one was set: its drop rate and its sizes. `None` is
+    /// the load as it ran before the axis existed — no drops, one size.
+    stress: Option<Stress>,
     round: u64,
     standings: BTreeMap<String, Standing>,
     moved_bytes: u64,
@@ -64,18 +81,46 @@ impl Load {
             node: node.into(),
             transports,
             bytes: TARGET_BYTES,
-            under_pressure: false,
+            stress: None,
             round: 0,
             standings: BTreeMap::new(),
             moved_bytes: 0,
         }
     }
 
-    /// The same exercise, dropping the occasional transfer mid-flight.
+    /// The same exercise, dropping the occasional transfer mid-flight:
+    /// [`Load::at`] `Realistic`.
     #[must_use]
-    pub fn under_pressure(mut self) -> Self {
-        self.under_pressure = true;
+    pub fn under_pressure(self) -> Self {
+        self.at(Stress::Realistic)
+    }
+
+    /// The same exercise at a level: drops at the level's rate, and the
+    /// payload cycling through the load's own size then the level's.
+    #[must_use]
+    pub fn at(mut self, stress: Stress) -> Self {
+        self.stress = Some(stress);
         self
+    }
+
+    /// The payload size this round: the load's own size without a level;
+    /// with one, its own size leading a cycle of the level's non-empty sizes.
+    fn size_this_round(&self) -> usize {
+        let Some(stress) = self.stress else {
+            return self.bytes;
+        };
+        let edges: Vec<usize> = stress
+            .sizes()
+            .iter()
+            .copied()
+            .filter(|&size| size > 0)
+            .collect();
+        let cycle = edges.len() as u64 + 1;
+        let at = self.round.saturating_sub(1) % cycle;
+        match usize::try_from(at) {
+            Ok(0) | Err(_) => self.bytes,
+            Ok(at) => edges[at - 1],
+        }
     }
 
     /// Drive these transports rather than every one. The tests judge three;
@@ -142,13 +187,23 @@ impl Load {
     #[allow(clippy::cast_precision_loss)] // display throughput, not arithmetic that must be exact
     fn carry(&self, transport: &dyn RoundTrip, contract: Contract) -> Line {
         let name = transport.transport();
-        let size = self.bytes;
+        let size = self.size_this_round();
+        if let Some(limit) = transport.ceiling()
+            && size > limit
+        {
+            // Judged, not waited on: the transport says it cannot carry this.
+            return Line::failed(format!(
+                "{} exceeds the transport's ceiling of {}",
+                human(size as f64),
+                human(limit as f64)
+            ));
+        }
         let structural = size <= VALIDATE_CEILING;
         // Below the ceiling: a valid document of the contract's shape, so the
         // contract can be run at size. Above it: a byte pattern, since parsing a
         // gigabyte proves nothing the byte check does not.
         let payload = if structural {
-            large_payload(contract, size)
+            stress::payload(contract, size)
         } else {
             filler(size)
         };
@@ -195,11 +250,14 @@ impl Load {
     /// Whether an injected drop hits this pair this round. `file` and `udp` never
     /// get one — file is the clean transport and udp already fails on size.
     fn dropped(&self, transport: &str, contract: Contract) -> bool {
-        if !self.under_pressure || transport == "file" || transport == "udp" {
+        let Some(stress) = self.stress else {
+            return false;
+        };
+        if transport == "file" || transport == "udp" {
             return false;
         }
         let key = format!("drop/{transport}/{}", contract.name());
-        fires_keyed(4, &key, self.round)
+        fires_keyed(scaled_rate(DROP_RATE, stress), &key, self.round)
     }
 }
 
@@ -255,228 +313,6 @@ fn human(bytes: f64) -> String {
     }
 }
 
-/// A plain byte pattern of `size` bytes, for loads too large to bother giving a
-/// structural shape. Cheap to build and to check.
-fn filler(size: usize) -> Vec<u8> {
-    (0..size)
-        .map(|i| u8::try_from(i % 256).unwrap_or(0))
-        .collect()
-}
-
-/// A large, valid payload of `contract`'s shape, at least `target` bytes. Each
-/// shape is built so its real contract still holds at size — valid JSON, XML and
-/// HTML, not just bytes of the right length.
-fn large_payload(contract: Contract, target: usize) -> Vec<u8> {
-    match contract {
-        Contract::Bytes => (0..target)
-            .map(|i| u8::try_from(i % 256).unwrap_or(0))
-            .collect(),
-        Contract::Text => repeat_to("xmip load ", target).into_bytes(),
-        Contract::Json => {
-            let mut body = String::from("{\"probe\":\"heavy\",\"n\":[0");
-            let mut i = 1u64;
-            while body.len() < target {
-                body.push(',');
-                body.push_str(&i.to_string());
-                i += 1;
-            }
-            body.push_str("]}");
-            body.into_bytes()
-        }
-        Contract::Xml => wrap_to("<probe>", "<i>x</i>", "</probe>", target),
-        Contract::Html => wrap_to(
-            "<!doctype html><title>xmip</title>",
-            "<p>heavy</p>",
-            "",
-            target,
-        ),
-        Contract::Csv => lines_to("id,customer,total", "A1,\"ACME, Inc\",15.00", target),
-        Contract::FixedWidth => lines_to("A00001ACME      02", "A00002BOLT      01", target),
-        Contract::Edifact => large_edifact(target),
-        Contract::Regex => repeat_to("PROBE-4711 heavy ", target).into_bytes(),
-        Contract::Schematron => wrap_to(
-            "<probe xmlns=\"urn:xmip:probe\">",
-            "<n>1</n>",
-            "</probe>",
-            target,
-        ),
-        Contract::Hl7v2 => large_hl7(target),
-        Contract::Fhir => wrap_to(
-            concat!(
-                r#"{"resourceType":"Bundle","type":"collection","entry":"#,
-                r#"[{"resource":{"resourceType":"Patient","id":"p0"}}"#
-            ),
-            r#",{"resource":{"resourceType":"Observation","id":"o"}}"#,
-            "]}",
-            target,
-        ),
-        Contract::X12 => large_x12(target),
-        // Each record is about a dozen bytes; the container is judged by
-        // every one of them decoding against the schema it carries.
-        Contract::Avro => crate::verdict::avro_container(target / 12 + 1, "heavy record"),
-        Contract::GraphqlSchema => wrap_to("query Heavy { ", "probe { id ping } ", "}", target),
-        // Each field-3 entry is two bytes of tag and length and the text.
-        Contract::Protobuf => crate::verdict::protobuf_message(target / 12 + 1, "heavy rec."),
-        Contract::Wsdl => large_wsdl(target),
-        Contract::OpenApi => large_openapi(target),
-        Contract::AsyncApi => large_asyncapi(target),
-        Contract::Sql => wrap_to(
-            "BEGIN;
-",
-            "INSERT INTO probe (n, ping) VALUES (1, 'heavy row');
-",
-            "COMMIT;
-",
-            target,
-        ),
-    }
-}
-
-/// One 850 padded with `MSG` segments to `target`, its `SE` count kept true
-/// so the interchange stays sound at any size.
-fn large_x12(target: usize) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let probe = String::from_utf8_lossy(crate::verdict::X12_PROBE).into_owned();
-    let (head, _) = probe
-        .split_once("SE*4*0001~")
-        .expect("the probe closes its set");
-    let mut body = head.to_string();
-    let mut segments = 3; // ST, BEG and PO1
-    while body.len() < target {
-        body.push_str("MSG*heavy~");
-        segments += 1;
-    }
-    segments += 1; // SE itself
-    let _ = write!(body, "SE*{segments}*0001~GE*1*1~IEA*1*000000001~");
-    body.into_bytes()
-}
-
-/// One ADT message padded with `NTE` segments to `target`, CR between segments
-/// and none at the end.
-fn large_hl7(target: usize) -> Vec<u8> {
-    let mut body = String::from_utf8_lossy(crate::verdict::HL7_PROBE).into_owned();
-    while body.len() < target {
-        body.push_str("\rNTE|1||heavy");
-    }
-    body.into_bytes()
-}
-
-/// `first` then `unit` lines to `target`, CRLF between and none at the end, so
-/// the payload survives a line-carrying transport byte for byte.
-fn lines_to(first: &str, unit: &str, target: usize) -> Vec<u8> {
-    let mut out = String::from(first);
-    while out.len() < target {
-        out.push_str("\r\n");
-        out.push_str(unit);
-    }
-    out.into_bytes()
-}
-
-/// One message padded with `FTX` segments to `target`, its `UNT` count kept
-/// true so the interchange stays sound at any size.
-fn large_edifact(target: usize) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let mut body = String::from(
-        "UNA:+.? 'UNB+UNOC:3+SENDER+RECEIVER+260907:1345+REF001'\
-         UNH+1+ORDERS:D:96A:UN'BGM+220+PO4711'",
-    );
-    let mut segments = 2; // UNH and BGM
-    while body.len() < target {
-        body.push_str("FTX+AAI+++heavy'");
-        segments += 1;
-    }
-    segments += 1; // UNT itself
-    let _ = write!(body, "UNT+{segments}+1'UNZ+1+REF001'");
-    body.into_bytes()
-}
-
-fn repeat_to(unit: &str, target: usize) -> String {
-    let mut out = String::with_capacity(target + unit.len());
-    while out.len() < target {
-        out.push_str(unit);
-    }
-    out
-}
-
-fn wrap_to(open: &str, unit: &str, close: &str, target: usize) -> Vec<u8> {
-    let mut out = String::from(open);
-    while out.len() + close.len() < target {
-        out.push_str(unit);
-    }
-    out.push_str(close);
-    out.into_bytes()
-}
-
-/// Rebuild an arrived large payload into a Stream, for the contract check the
-/// caller runs. Kept here so the scenario owns the Stream shape it validates.
-#[must_use]
-pub fn as_stream(contract: Contract, bytes: Vec<u8>) -> Stream {
-    Stream::new(
-        StreamId::new(1),
-        bytes,
-        Some(contract.representation().to_string()),
-    )
-}
-
-/// One service description padded with messages to `target`, every
-/// reference still landing.
-fn large_wsdl(target: usize) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let probe = String::from_utf8_lossy(crate::verdict::WSDL_PROBE).into_owned();
-    let (head, tail) = probe
-        .split_once("<portType")
-        .expect("the probe has a port type");
-    let mut body = head.to_string();
-    let mut n = 0;
-    while body.len() + tail.len() < target {
-        let _ = write!(body, "<message name=\"M{n}\"/>");
-        n += 1;
-    }
-    body.push_str("<portType");
-    body.push_str(tail);
-    body.into_bytes()
-}
-
-/// One description padded with paths to `target`, each with its responses.
-fn large_openapi(target: usize) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let mut body =
-        String::from(r#"{"openapi":"3.0.3","info":{"title":"Heavy","version":"1"},"paths":{"#);
-    let mut n = 0;
-    while body.len() < target {
-        if n > 0 {
-            body.push(',');
-        }
-        let _ = write!(
-            body,
-            r#""/p{n}":{{"get":{{"responses":{{"200":{{"description":"ok"}}}}}}}}"#
-        );
-        n += 1;
-    }
-    body.push_str("}}");
-    body.into_bytes()
-}
-
-/// One description padded with channels to `target`.
-fn large_asyncapi(target: usize) -> Vec<u8> {
-    use std::fmt::Write as _;
-    let mut body =
-        String::from(r#"{"asyncapi":"2.6.0","info":{"title":"Heavy","version":"1"},"channels":{"#);
-    let mut n = 0;
-    while body.len() < target {
-        if n > 0 {
-            body.push(',');
-        }
-        let _ = write!(
-            body,
-            r#""c/{n}":{{"subscribe":{{"message":{{"name":"m"}}}}}}"#
-        );
-        n += 1;
-    }
-    body.push_str("}}");
-    body.into_bytes()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +327,7 @@ mod tests {
             Box::new(UdpRoundTrip),
         ]
     }
+    use crate::storm::violations;
     use crate::support::scratch;
     use observe::Health;
 
@@ -587,6 +424,104 @@ mod tests {
             moved > 1024 * 1024,
             "several megabytes moved across two ticks"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn at_a_level_the_load_leads_a_cycle_of_the_edge_sizes() {
+        let dir = scratch("sizes");
+        let mut hl = Load::new("xmip:///playground/load", &dir)
+            .at(Stress::Harsh)
+            .over(Vec::new());
+        // Harsh's zero — the probe — is not a load and is left out.
+        let expected = [
+            TARGET_BYTES,
+            1,
+            1_471,
+            1_472,
+            1_473,
+            8_192,
+            65_507,
+            65_537,
+            TARGET_BYTES,
+        ];
+        for size in expected {
+            hl.tick();
+            assert_eq!(hl.size_this_round(), size, "round {}", hl.round);
+        }
+    }
+
+    /// Drive `hl` for `rounds` at a level: every round within the storm's
+    /// budget, every record a whole delivery or a reason, the rollup honest,
+    /// and `file` — no drops, no ceiling — whole every round.
+    fn stress_rounds(hl: &mut Load, rounds: u64) -> Snapshot {
+        let mut snapshot = Snapshot::new();
+        for round in 1..=rounds {
+            let started = Instant::now();
+            snapshot = hl.tick();
+            let took = started.elapsed();
+            let budget = crate::roundtrip::TIMEOUT * 3 * 20 * 3;
+            assert!(took <= budget, "round {round} took {took:?}");
+            let lying = violations(&snapshot, "xmip:///playground/load");
+            assert!(lying.is_empty(), "round {round}: {}", lying.join("; "));
+            for record in snapshot.health("xmip:///playground/load/file") {
+                assert_eq!(record.health, Health::Fine, "round {round}: {record:?}");
+            }
+        }
+        snapshot
+    }
+
+    /// The three transports at Harsh, in two tests rather than one: udp
+    /// declares no ceiling yet, so every round above a datagram waits twenty
+    /// timeouts, and one full cycle of the level's sizes over all three would
+    /// cost the suite two minutes on its own. file and tcp take the whole
+    /// cycle; udp takes the rounds that prove the refusal and the carry.
+    #[test]
+    fn harsh_sizes_arrive_whole_over_file_and_tcp() {
+        let dir = scratch("load-harsh");
+        let mut hl = Load::new("xmip:///playground/load", &dir)
+            .at(Stress::Harsh)
+            .over(vec![
+                Box::new(FileRoundTrip::new(&dir)),
+                Box::new(TcpRoundTrip),
+            ]);
+        let cycle = 1 + Stress::Harsh.sizes().iter().filter(|&&s| s > 0).count() as u64;
+        let snapshot = stress_rounds(&mut hl, cycle);
+        // tcp is dropped now and then at three times the rate; every red
+        // says so, and nothing is truncated or corrupted.
+        for record in snapshot.health("xmip:///playground/load/tcp") {
+            assert!(
+                matches!(record.health, Health::Fine | Health::Stressed)
+                    || record.evidence.contains("dropped"),
+                "{record:?}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn harsh_udp_refuses_above_a_datagram_with_a_reason_and_carries_below() {
+        let dir = scratch("load-harsh-udp");
+        let mut hl = Load::new("xmip:///playground/load", &dir)
+            .at(Stress::Harsh)
+            .over(vec![Box::new(UdpRoundTrip)]);
+        // The megabyte, then one byte and the MTU minus one.
+        let snapshot = stress_rounds(&mut hl, 3);
+        let udp = snapshot.health("xmip:///playground/load/udp");
+        assert!(udp.iter().all(|r| !r.evidence.is_empty()));
+        assert!(
+            udp.iter().all(|r| r.health == Health::Stressed),
+            "refused the megabyte, carried the rest: {udp:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore = "brutal: every transport at every size, for the runner"]
+    fn brutal_sizes_over_every_transport() {
+        let dir = scratch("load-brutal");
+        let mut hl = Load::new("xmip:///playground/load", &dir).at(Stress::Brutal);
+        stress_rounds(&mut hl, Stress::Brutal.rounds());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

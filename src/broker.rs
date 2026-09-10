@@ -269,4 +269,29 @@ mod tests {
         assert_eq!(returned(&PostgresqlRoundTrip, &[0xff, 0xfe]), [0xff, 0xfe]);
         assert_eq!(returned(&PostgresqlRoundTrip, b"a\0b"), b"a\0b");
     }
+
+    #[test]
+    fn activemq_carries_the_edges() {
+        crate::support::carries_the_edges(&ActiveMqRoundTrip);
+    }
+
+    #[test]
+    fn rabbitmq_carries_the_edges() {
+        crate::support::carries_the_edges(&RabbitMqRoundTrip);
+    }
+
+    #[test]
+    fn nats_jetstream_carries_the_edges() {
+        crate::support::carries_the_edges(&JetStreamRoundTrip);
+    }
+
+    #[test]
+    fn redpanda_carries_the_edges() {
+        crate::support::carries_the_edges(&RedpandaRoundTrip);
+    }
+
+    #[test]
+    fn postgresql_carries_the_edges() {
+        crate::support::carries_the_edges(&PostgresqlRoundTrip);
+    }
 }

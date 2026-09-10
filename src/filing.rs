@@ -14,7 +14,9 @@
 //!
 //! Under pressure the filing skips a cabinet now and then, deterministically,
 //! and reports the skip as a fail — an archive fault an operator watches
-//! surface, and watches fade.
+//! surface, and watches fade. At a [`Stress`] level the skip rate scales with
+//! it and the probe follows its sizes, so a hard round files what a cabinet's
+//! row, page or object breaks on.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,11 +28,12 @@ use crate::cabinet::{Cabinet, Filed, all_cabinets};
 use crate::fault::fires_keyed;
 use crate::schedule::CONTRACTS;
 use crate::standing::{Mark, Standing};
+use crate::stress::{self, Stress, scaled_rate};
 use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
-/// How often, in percent of rounds, a pressured filing skips one
-/// (technology, contract).
+/// How often, in percent of rounds at `Realistic`, a pressured filing skips
+/// one (technology, contract).
 const SKIP_RATE: u8 = 5;
 
 /// One (technology, contract) judged this round: the scope, how it went, the
@@ -49,7 +52,9 @@ pub struct Filing {
     node: String,
     cabinets: Vec<Box<dyn Cabinet>>,
     round: u64,
-    under_pressure: bool,
+    /// The level, when one was set: its skip rate and its probe sizes.
+    /// `None` skips nothing and files the contract's own probe.
+    stress: Option<Stress>,
     standings: BTreeMap<String, Standing>,
     filed: u64,
     moved_bytes: u64,
@@ -64,17 +69,25 @@ impl Filing {
             node: node.into(),
             cabinets: all_cabinets(dir),
             round: 0,
-            under_pressure: false,
+            stress: None,
             standings: BTreeMap::new(),
             filed: 0,
             moved_bytes: 0,
         }
     }
 
-    /// The same filing, occasionally skipping a cabinet so faults occur.
+    /// The same filing, occasionally skipping a cabinet so faults occur:
+    /// [`Filing::at`] `Realistic`.
     #[must_use]
-    pub fn under_pressure(mut self) -> Self {
-        self.under_pressure = true;
+    pub fn under_pressure(self) -> Self {
+        self.at(Stress::Realistic)
+    }
+
+    /// The same filing at a level: skips at the level's rate, and the probe
+    /// at the level's size for the round.
+    #[must_use]
+    pub fn at(mut self, stress: Stress) -> Self {
+        self.stress = Some(stress);
         self
     }
 
@@ -174,12 +187,17 @@ impl Filing {
     }
 
     /// The probe item for this round and contract: the contract's own
-    /// payload, tagged with where it came from and which round filed it.
+    /// payload — at a level, the level's size for the round, still holding
+    /// the contract — tagged with where it came from and which round filed it.
     fn probe(&self, contract: Contract) -> ArchiveItem {
+        let bytes = match self.stress {
+            Some(stress) => stress::payload(contract, stress.size_for(self.round)),
+            None => contract.payload(),
+        };
         ArchiveItem {
             data_type: contract.name().to_string(),
             identifier: format!("{}-{}", self.round, contract.name()),
-            bytes: contract.payload(),
+            bytes,
             metadata: vec![
                 ("source".to_string(), "playground".to_string()),
                 ("round".to_string(), self.round.to_string()),
@@ -189,11 +207,11 @@ impl Filing {
 
     /// Whether this (technology, contract) is skipped this round.
     fn skipped(&self, technology: &str, contract: Contract) -> bool {
-        if !self.under_pressure {
+        let Some(stress) = self.stress else {
             return false;
-        }
+        };
         fires_keyed(
-            SKIP_RATE,
+            scaled_rate(SKIP_RATE, stress),
             &format!("skip/{technology}/{}", contract.name()),
             self.round,
         )
@@ -216,7 +234,7 @@ fn difference(filed: &ArchiveItem, returned: &ArchiveItem) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cabinet::{FileCabinet, ParquetCabinet};
+    use crate::cabinet::{FileCabinet, ParquetCabinet, SqliteCabinet};
     use crate::support::scratch;
     use observe::Health;
 
@@ -273,6 +291,53 @@ mod tests {
             }
         }
         assert!(ever_red, "a skipped filing must surface as a fault");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Drive `filing` for `rounds` at a level: every round's rollup honest,
+    /// every red a skip with its line or a cabinet's own reason, and every
+    /// filed item returned whole. Returns whether a fault ever surfaced.
+    fn stress_rounds(filing: &mut Filing, rounds: u64) -> bool {
+        let mut ever_red = false;
+        for round in 1..=rounds {
+            let snapshot = filing.tick();
+            let lying = crate::storm::violations(&snapshot, NODE);
+            assert!(lying.is_empty(), "round {round}: {}", lying.join("; "));
+            for record in snapshot.health(NODE) {
+                if record.health == Health::Done {
+                    ever_red = true;
+                    assert!(
+                        record.evidence.contains("skipped"),
+                        "round {round}: a cabinet did not return the probe whole: {record:?}"
+                    );
+                }
+            }
+        }
+        ever_red
+    }
+
+    #[test]
+    fn harsh_skips_surface_and_every_size_files_whole() {
+        let dir = scratch("filing-harsh");
+        let mut filing = Filing::new(NODE, &dir).at(Stress::Harsh).over(vec![
+            Box::new(FileCabinet::new(dir.join("file"))),
+            Box::new(ParquetCabinet::new(dir.join("parquet"))),
+            Box::new(SqliteCabinet::new(dir.join("sqlite"))),
+        ]);
+        let faulted = stress_rounds(&mut filing, Stress::Harsh.rounds());
+        assert!(
+            faulted,
+            "at three times the skip rate a skip surfaces within the rounds"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore = "brutal: every cabinet at every size, for the runner"]
+    fn brutal_sizes_through_every_cabinet() {
+        let dir = scratch("filing-brutal");
+        let mut filing = Filing::new(NODE, &dir).at(Stress::Brutal);
+        stress_rounds(&mut filing, Stress::Brutal.rounds());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

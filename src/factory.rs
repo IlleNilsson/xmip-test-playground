@@ -66,10 +66,15 @@ impl RoundTrip for CotpRoundTrip {
 /// payload's length as the range.
 const BLOCK: &str = "DB1.DBB0";
 
+/// What one S7 address spans: the Any pointer that names a variable counts
+/// its bytes in sixteen bits, and a delivery is one write at one address.
+const S7_SPAN: usize = 65_535;
+
 /// S7comm: bind a session holding data block 1 sized to the payload, connect
 /// a client, write the payload there in as many jobs as the PDU length takes,
 /// and take the block as it is once the client disconnects. An empty payload
 /// is a write of no jobs and an empty block: Setup Communication, then DR.
+/// A payload over [`S7_SPAN`] is refused before anything connects.
 pub struct S7RoundTrip;
 
 impl RoundTrip for S7RoundTrip {
@@ -77,7 +82,17 @@ impl RoundTrip for S7RoundTrip {
         "s7comm"
     }
 
+    fn ceiling(&self) -> Option<usize> {
+        Some(S7_SPAN)
+    }
+
     fn exchange(&self, payload: &[u8]) -> Exchange {
+        if payload.len() > S7_SPAN {
+            return Exchange::Failed(format!(
+                "{} bytes is over the {S7_SPAN} one address spans",
+                payload.len()
+            ));
+        }
         let far_end = S7Transport::new("127.0.0.1:0", BLOCK).timing_out_after(TIMEOUT);
         let (listener, address) = match far_end.bind() {
             Ok(bound) => bound,
@@ -189,5 +204,24 @@ mod tests {
         assert_eq!(returned(&SecsGemRoundTrip, b"S6F11"), b"S6F11");
         assert_eq!(returned(&SecsGemRoundTrip, &long), long);
         assert_eq!(returned(&SecsGemRoundTrip, b""), b"");
+    }
+
+    #[test]
+    fn cotp_carries_the_edges() {
+        crate::support::carries_the_edges(&CotpRoundTrip);
+    }
+
+    #[test]
+    fn s7comm_carries_the_edges() {
+        crate::support::carries_the_edges(&S7RoundTrip);
+        let brim = crate::stress::patterned(S7_SPAN);
+        assert_eq!(returned(&S7RoundTrip, &brim), brim);
+        let over = vec![0u8; S7_SPAN + 1];
+        assert!(matches!(S7RoundTrip.exchange(&over), Exchange::Failed(_)));
+    }
+
+    #[test]
+    fn secs_gem_carries_the_edges() {
+        crate::support::carries_the_edges(&SecsGemRoundTrip);
     }
 }

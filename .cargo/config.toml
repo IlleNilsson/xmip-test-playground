@@ -1,0 +1,7 @@
+# Every test here opens sockets on loopback and files on one disk, and the
+# harsh tests drive four pairs at once with mebibytes on the wire. All of
+# them at once, one per core, is contention the latency judgements cannot
+# tell from a fault; four at a time keeps a busy box from reading as a
+# broken one (2026-09-10).
+[env]
+RUST_TEST_THREADS = "4"

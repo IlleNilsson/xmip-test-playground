@@ -233,6 +233,23 @@ impl FaultPlan {
         }
     }
 
+    /// The same rules with every rate scaled to `stress` — tripled at
+    /// `Harsh`, at the ceiling at `Brutal`, nothing at `Calm` — so one table
+    /// of realistic faults serves every level.
+    #[must_use]
+    pub fn at(self, stress: crate::stress::Stress) -> Self {
+        Self {
+            rules: self
+                .rules
+                .into_iter()
+                .map(|rule| FaultRule {
+                    rate: crate::stress::scaled_rate(rule.rate, stress),
+                    ..rule
+                })
+                .collect(),
+        }
+    }
+
     /// The fault this (stage, transport, contract) suffers this round, if any.
     /// The first matching rule that fires wins.
     #[must_use]

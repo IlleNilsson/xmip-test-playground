@@ -8,9 +8,11 @@
 //! a few kilobytes over UDP and says so; that ceiling shows red at load
 //! without any injection, as UDP's does.
 
+use std::sync::OnceLock;
+
 use transport::Transport;
 use transport::error::protocol_error;
-use transport_dns::DnsTransport;
+use transport_dns::{DnsTransport, Message, UDP_EDNS, message};
 use transport_redis_streams::RedisStreamsTransport;
 
 use crate::roundtrip::{Exchange, RoundTrip, TIMEOUT, listen_exchange};
@@ -49,8 +51,28 @@ impl RoundTrip for RedisStreamsRoundTrip {
     }
 }
 
+/// The zone the update adds to, and the name it adds under.
+const ZONE: &str = "xmip.playground.";
+const NAME: &str = "probe.xmip.playground.";
+
+/// The most one update carries: the largest payload whose update — the zone
+/// question, one TXT record of it in strings of 255, the OPT record asking
+/// for [`UDP_EDNS`] — encodes within the datagram, found through the
+/// transport's own encoder once and remembered.
+fn dns_ceiling() -> usize {
+    static CEILING: OnceLock<usize> = OnceLock::new();
+    *CEILING.get_or_init(|| {
+        let fits = |bytes: usize| {
+            let update = Message::update_adding_txt(0, ZONE, NAME, &vec![0; bytes]).with_edns();
+            message::encode(&update).is_ok_and(|wire| wire.len() <= UDP_EDNS)
+        };
+        (0..=UDP_EDNS).rev().find(|&bytes| fits(bytes)).unwrap_or(0)
+    })
+}
+
 /// DNS: bind a server for one zone, send an update adding a TXT record that
-/// carries the payload, and take the update's payload as what came back.
+/// carries the payload, and take the update's payload as what came back. A
+/// payload over the ceiling is refused before anything waits on it.
 pub struct DnsRoundTrip;
 
 impl RoundTrip for DnsRoundTrip {
@@ -58,33 +80,27 @@ impl RoundTrip for DnsRoundTrip {
         "dns"
     }
 
+    fn ceiling(&self) -> Option<usize> {
+        Some(dns_ceiling())
+    }
+
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end =
-            DnsTransport::new("127.0.0.1:0", "xmip.playground.", "probe.xmip.playground.")
-                .timing_out_after(TIMEOUT);
+        if payload.len() > dns_ceiling() {
+            return Exchange::Failed(format!(
+                "{} bytes is over the {} one update carries in a datagram",
+                payload.len(),
+                dns_ceiling()
+            ));
+        }
+        let far_end = DnsTransport::new("127.0.0.1:0", ZONE, NAME).timing_out_after(TIMEOUT);
         let (socket, address) = match far_end.bind_udp() {
             Ok(bound) => bound,
             Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
         };
-        // The datagram ceiling, judged before anything waits on it: a
-        // payload the update cannot frame never reaches the wire.
-        let update = transport_dns::Message::update_adding_txt(0, "xmip.playground.", "p", payload)
-            .with_edns();
-        match transport_dns::message::encode(&update) {
-            Ok(bytes) if bytes.len() <= transport_dns::UDP_EDNS => {}
-            Ok(bytes) => {
-                return Exchange::Failed(format!(
-                    "an update of {} bytes is over the {} a datagram carries",
-                    bytes.len(),
-                    transport_dns::UDP_EDNS
-                ));
-            }
-            Err(error) => return Exchange::Failed(format!("update failed: {error}")),
-        }
         let payload = payload.to_vec();
         let timeout = TIMEOUT;
         let sender = std::thread::spawn(move || {
-            DnsTransport::new("127.0.0.1:0", "xmip.playground.", "probe.xmip.playground.")
+            DnsTransport::new("127.0.0.1:0", ZONE, NAME)
                 .timing_out_after(timeout)
                 .send(&address, &payload)
         });
@@ -121,5 +137,24 @@ mod tests {
         assert_eq!(returned(&DnsRoundTrip, &long[..3000]), long[..3000]);
         assert_eq!(returned(&DnsRoundTrip, b""), b"");
         assert!(matches!(DnsRoundTrip.exchange(&long), Exchange::Failed(_)));
+    }
+
+    #[test]
+    fn redis_streams_carries_the_edges() {
+        crate::support::carries_the_edges(&RedisStreamsRoundTrip);
+    }
+
+    #[test]
+    fn dns_carries_the_edges() {
+        crate::support::carries_the_edges(&DnsRoundTrip);
+        assert!(
+            (3_000..UDP_EDNS).contains(&dns_ceiling()),
+            "{}",
+            dns_ceiling()
+        );
+        let brim = crate::stress::patterned(dns_ceiling());
+        assert_eq!(returned(&DnsRoundTrip, &brim), brim);
+        let over = vec![0u8; dns_ceiling() + 1];
+        assert!(matches!(DnsRoundTrip.exchange(&over), Exchange::Failed(_)));
     }
 }

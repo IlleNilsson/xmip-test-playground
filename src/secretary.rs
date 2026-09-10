@@ -31,11 +31,16 @@ use retain::{RetentionAction, RetentionPolicy};
 use crate::fault::fires_keyed;
 use crate::schedule::CONTRACTS;
 use crate::standing::{Mark, Standing};
+use crate::stress::{Stress, scaled_rate};
 use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
 /// Seconds in a day — the unit the simulated clock is quantised to for creation.
 const SECONDS_PER_DAY: u64 = 86_400;
+
+/// How often, in percent of rounds at `Realistic`, a pressured secretary
+/// misses a sweep of one class.
+const MISS_RATE: u8 = 5;
 
 /// How long an item is retained before it is archived, in **days** of simulated
 /// time. A realistic records lifecycle: live for a quarter, then archived.
@@ -131,7 +136,8 @@ pub struct Secretary {
     round: u64,
     emitted_days: u64,
     next_id: u64,
-    under_pressure: bool,
+    /// The level, when one was set: its missed-sweep rate. `None` misses none.
+    stress: Option<Stress>,
     standings: BTreeMap<String, Standing>,
 }
 
@@ -148,15 +154,22 @@ impl Secretary {
             round: 0,
             emitted_days: 0,
             next_id: 0,
-            under_pressure: false,
+            stress: None,
             standings: BTreeMap::new(),
         }
     }
 
-    /// The same secretary, occasionally missing a sweep so leaks occur.
+    /// The same secretary, occasionally missing a sweep so leaks occur:
+    /// [`Secretary::at`] `Realistic`.
     #[must_use]
-    pub fn under_pressure(mut self) -> Self {
-        self.under_pressure = true;
+    pub fn under_pressure(self) -> Self {
+        self.at(Stress::Realistic)
+    }
+
+    /// The same secretary at a level: sweeps missed at the level's rate.
+    #[must_use]
+    pub fn at(mut self, stress: Stress) -> Self {
+        self.stress = Some(stress);
         self
     }
 
@@ -253,10 +266,11 @@ impl Secretary {
 
     /// Whether a sweep of the given kind is missed for this class this round.
     fn miss(&self, kind: &str, contract: Contract) -> bool {
-        if !self.under_pressure {
+        let Some(stress) = self.stress else {
             return false;
-        }
-        fires_keyed(5, &format!("{kind}/{}", contract.name()), self.round)
+        };
+        let rate = scaled_rate(MISS_RATE, stress);
+        fires_keyed(rate, &format!("{kind}/{}", contract.name()), self.round)
     }
 
     /// The verdict for one (stage, class) this round, folded over time.
@@ -417,5 +431,51 @@ mod tests {
             }
         }
         assert!(ever_red, "missed sweeps must surface as a leak");
+    }
+
+    /// Drive a secretary at a level for `rounds` at `days_per_tick`, every
+    /// round's rollup honest and every leak carrying its line; returns
+    /// whether a leak ever surfaced.
+    fn stress_rounds(secretary: &mut Secretary, days_per_tick: u64, rounds: u64) -> bool {
+        let mut ever_red = false;
+        for round in 1..=rounds {
+            let simulated = Duration::from_secs(round * days_per_tick * SECONDS_PER_DAY);
+            let snapshot = secretary.tick(simulated);
+            let lying = crate::storm::violations(&snapshot, "xmip:///playground/secretary");
+            assert!(lying.is_empty(), "round {round}: {}", lying.join("; "));
+            if snapshot.worst("xmip:///playground/secretary") == Some(Health::Holding) {
+                ever_red = true;
+                let leaks: Vec<_> = snapshot
+                    .health("xmip:///playground/secretary")
+                    .into_iter()
+                    .filter(|r| r.health == Health::Done)
+                    .collect();
+                assert!(
+                    leaks
+                        .iter()
+                        .all(|r| r.evidence.contains("leak") || r.evidence.contains("refused")),
+                    "a red names the leak or the refusal: {leaks:?}"
+                );
+            }
+        }
+        ever_red
+    }
+
+    #[test]
+    fn harsh_missed_sweeps_leak_within_the_rounds_and_are_named() {
+        // Thirty days a tick: the first items cross the ninety-day window on
+        // the fourth round, leaving most of Harsh's rounds for sweeps to miss
+        // at three times the rate.
+        let mut secretary = Secretary::new("xmip:///playground/secretary").at(Stress::Harsh);
+        let leaked = stress_rounds(&mut secretary, 30, Stress::Harsh.rounds());
+        assert!(leaked, "at Harsh a leak surfaces within the level's rounds");
+        assert!(!secretary.archived.is_empty(), "and the rest was archived");
+    }
+
+    #[test]
+    #[ignore = "brutal: the ceiling miss rate over the level's rounds, for the runner"]
+    fn brutal_missed_sweeps_over_the_rounds() {
+        let mut secretary = Secretary::new("xmip:///playground/secretary").at(Stress::Brutal);
+        assert!(stress_rounds(&mut secretary, 10, Stress::Brutal.rounds()));
     }
 }

@@ -50,12 +50,13 @@ impl RoundTrip for SyslogRoundTrip {
     }
 }
 
-/// CoAP: bind a server, POST the payload as non-confirmable messages of at
-/// most a kilobyte in turn, then a confirmable empty POST to close, which is
-/// acknowledged; the server takes them in order, a retransmitted one only
-/// once. Confirming every kilobyte is what block-wise transfer does with a
-/// window; here a lost datagram shows as a truncated Stream, red, which is
-/// the honest verdict for a transport without one.
+/// CoAP: bind a server, POST the payload as confirmable messages of at most
+/// a kilobyte in turn, each acknowledged before the next goes, then an empty
+/// POST to close; the server takes them in order, a retransmitted one only
+/// once. One message in flight is block-wise transfer with a window of one,
+/// and it is the flow control that keeps a burst from overrunning the far
+/// end's socket: sent non-confirmable, a mebibyte lost its tail on loopback
+/// (2026-09-09), which was UDP being honest about a sender without one.
 pub struct CoapRoundTrip;
 
 impl RoundTrip for CoapRoundTrip {
@@ -71,14 +72,16 @@ impl RoundTrip for CoapRoundTrip {
         };
         let payload = payload.to_vec();
         let sender = std::thread::spawn(move || {
-            let bulk = CoapTransport::new("127.0.0.1:0").non_confirmable();
+            // Loopback acknowledges within a millisecond; a hundred, doubled
+            // on every retransmission, keeps a far end that went away inside
+            // the bound a round is judged by.
+            let near_end =
+                CoapTransport::new("127.0.0.1:0").acknowledged_within(Duration::from_millis(100));
             let target = format!("coap://{address}/probe");
             for block in payload.chunks(MAX_PAYLOAD) {
-                bulk.send(&target, block)?;
+                near_end.send(&target, block)?;
             }
-            CoapTransport::new("127.0.0.1:0")
-                .acknowledged_within(Duration::from_millis(500))
-                .send(&target, &[])
+            near_end.send(&target, &[])
         });
         let mut bytes = Vec::new();
         let mut last_seen: Option<(String, u16)> = None;
@@ -140,5 +143,15 @@ mod tests {
         assert_eq!(returned(&CoapRoundTrip, b"post"), b"post");
         assert_eq!(returned(&CoapRoundTrip, &long), long);
         assert_eq!(returned(&CoapRoundTrip, b""), b"");
+    }
+
+    #[test]
+    fn syslog_carries_the_edges() {
+        crate::support::carries_the_edges(&SyslogRoundTrip);
+    }
+
+    #[test]
+    fn coap_carries_the_edges() {
+        crate::support::carries_the_edges(&CoapRoundTrip);
     }
 }

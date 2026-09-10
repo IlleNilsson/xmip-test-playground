@@ -10,38 +10,30 @@
 //! the record over time: how many rounds passed, and whether the pair fails now.
 //!
 //! The running thread is the caller's — the crate gives the tick, so a test
-//! drives many rounds without waiting on a clock.
+//! drives many rounds without waiting on a clock. At a [`Stress`] level the
+//! tick drives several pairs at once from as many threads as the level says,
+//! sends the level's payload for the round, and injects the level's faults;
+//! without one it runs as it always has — one pair at a time, the probe, and
+//! whatever faults were set.
+
+pub mod tally;
+pub(crate) mod workers;
 
 use std::collections::BTreeMap;
 
-use observe::{Activity, Count, Counted, Health, HealthRecord, Item, ItemKind, Snapshot};
+use observe::{Activity, Count, Counted, Item, ItemKind, Snapshot};
 
 use crate::fault::FaultPlan;
 use crate::identity::{self, IdentityFaults};
-use crate::pingpong::ping_pong;
+use crate::pingpong::{ping_pong, ping_pong_with};
 use crate::roundtrip::{RoundTrip, all_transports};
+use crate::stress::{self, Stress};
 use crate::support::now_unix_nanos;
 use crate::verdict::{Contract, Outcome, Stage, Verdict};
 
-/// One pair's record over time: how many rounds it has run, how many failed,
-/// and the last round's outcome. This is what "over time" means — a pair is
-/// judged by its history, not its latest tick.
-#[derive(Clone, Debug, Default)]
-pub struct Tally {
-    pub rounds: u64,
-    pub failures: u64,
-    pub last: Option<Outcome>,
-}
-
-impl Tally {
-    fn fold(&mut self, outcome: &Outcome) {
-        self.rounds += 1;
-        if matches!(outcome, Outcome::Failed(_)) {
-            self.failures += 1;
-        }
-        self.last = Some(outcome.clone());
-    }
-}
+pub use tally::Tally;
+use tally::over_time;
+pub(crate) use workers::drive_pairs;
 
 /// Every contract the playground exercises today: the three local shapes and
 /// every contract technology the estate has landed. ADR-0028's matrix is every
@@ -78,6 +70,9 @@ pub struct Schedule {
     transports: Vec<Box<dyn RoundTrip>>,
     faults: FaultPlan,
     identity_faults: IdentityFaults,
+    /// The level, when one was set: its payload sizes and its workers.
+    /// `None` is the schedule as it ran before the axis existed.
+    stress: Option<Stress>,
     round: u64,
     tallies: BTreeMap<String, Tally>,
     activity: Activity,
@@ -101,6 +96,7 @@ impl Schedule {
             transports,
             faults: FaultPlan::none(),
             identity_faults: IdentityFaults::none(),
+            stress: None,
             round: 0,
             tallies: BTreeMap::new(),
             activity: Activity::with_capacity(2048),
@@ -129,12 +125,35 @@ impl Schedule {
         self
     }
 
+    /// The same schedule at a [`Stress`] level: the realistic faults scaled
+    /// to it (none at `Calm`, identity faults included above it), the level's
+    /// payload for each round — validation still runs over what arrived — and
+    /// its pairs driven from the level's workers at once.
+    #[must_use]
+    pub fn at(self, stress: Stress) -> Self {
+        let faults = if stress == Stress::Calm {
+            FaultPlan::none()
+        } else {
+            FaultPlan::realistic().at(stress)
+        };
+        let mut leveled = self.with_faults(faults);
+        leveled.stress = Some(stress);
+        leveled
+    }
+
     /// Drive these transports rather than every one. A test that judges the
     /// rollup over forty rounds needs three; the runner drives all.
     #[must_use]
     pub fn over(mut self, transports: Vec<Box<dyn RoundTrip>>) -> Self {
         self.transports = transports;
         self
+    }
+
+    /// How many pairs a tick drives, and from how many threads at once.
+    #[must_use]
+    pub fn shape(&self) -> (usize, usize) {
+        let pairs = self.transports.len() * CONTRACTS.len();
+        (pairs, self.stress.map_or(1, Stress::workers))
     }
 
     /// Run every pair once, expand across the stages, fold each into its tally,
@@ -215,37 +234,56 @@ impl Schedule {
 
     /// The verdicts of one round: every transport by every contract, each
     /// expanded across Receive, Process and Send with its faults injected.
+    /// At a level the pairs run from its workers at once; the verdicts come
+    /// back in the pairs' original order whichever thread reached them.
     #[must_use]
     pub fn run_once(&self, now: i64) -> Vec<Verdict> {
-        let mut verdicts = Vec::new();
+        let size = self.stress.map(|level| level.size_for(self.round));
+        let (_, workers) = self.shape();
+        drive_pairs(&self.transports, workers, |transport, contract| {
+            self.judge(transport, contract, size, now)
+        })
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 
-        for transport in &self.transports {
-            let name = transport.transport();
-            for &contract in &CONTRACTS {
-                let (base, bytes) = ping_pong(transport.as_ref(), contract);
+    /// One pair's verdicts this round: the real exchange — the probe, or the
+    /// level's payload at `size` — expanded across the three stages with the
+    /// round's faults, then the identity steps.
+    fn judge(
+        &self,
+        transport: &dyn RoundTrip,
+        contract: Contract,
+        size: Option<usize>,
+        now: i64,
+    ) -> Vec<Verdict> {
+        let name = transport.transport();
+        let (base, bytes) = match size {
+            Some(size) => ping_pong_with(transport, contract, &stress::payload(contract, size)),
+            None => ping_pong(transport, contract),
+        };
 
-                for stage in Stage::ALL {
-                    let (outcome, stage_bytes) =
-                        match self.faults.fault_for(stage, name, contract, self.round) {
-                            Some(fault) => (Outcome::Failed(fault.evidence()), 0),
-                            None => stage_outcome(stage, &base, bytes),
-                        };
+        let mut verdicts = Vec::with_capacity(Stage::ALL.len() + 4);
+        for stage in Stage::ALL {
+            let (outcome, stage_bytes) =
+                match self.faults.fault_for(stage, name, contract, self.round) {
+                    Some(fault) => (Outcome::Failed(fault.evidence()), 0),
+                    None => stage_outcome(stage, &base, bytes),
+                };
 
-                    verdicts.push(Verdict {
-                        stage,
-                        transport: name.to_string(),
-                        contract,
-                        outcome,
-                        bytes: stage_bytes,
-                        point: None,
-                        observed_unix_nanos: now,
-                    });
-                }
-
-                self.push_identity(&mut verdicts, name, contract, now);
-            }
+            verdicts.push(Verdict {
+                stage,
+                transport: name.to_string(),
+                contract,
+                outcome,
+                bytes: stage_bytes,
+                point: None,
+                observed_unix_nanos: now,
+            });
         }
 
+        self.push_identity(&mut verdicts, name, contract, now);
         verdicts
     }
 
@@ -331,66 +369,111 @@ fn stage_outcome(stage: Stage, base: &Outcome, bytes: u64) -> (Outcome, u64) {
     }
 }
 
-/// A pair's health from its record over time. Green while the last round
-/// passed, its severity rising with the failure rate so a pair that fails one
-/// round in ten reads worse than one that failed once an hour ago. Red the
-/// moment the last round failed, with the fault as evidence.
-fn over_time(scope: &str, tally: &Tally, now: i64) -> HealthRecord {
-    let passed = tally.rounds - tally.failures;
-
-    let (health, severity, evidence) = match &tally.last {
-        Some(Outcome::Delivered) if tally.failures == 0 => (
-            Health::Fine,
-            0,
-            format!("{passed}/{} rounds passed", tally.rounds),
-        ),
-        Some(Outcome::Delivered) => (
-            // Passing now, but it has failed before — a yellow that says so,
-            // deepening with how often it has failed.
-            Health::Stressed,
-            rate_severity(tally),
-            format!(
-                "{passed}/{} rounds passed, {} failed",
-                tally.rounds, tally.failures
-            ),
-        ),
-        Some(Outcome::OneSided(why)) => (Health::Stressed, 40, why.clone()),
-        Some(Outcome::Failed(why)) => (
-            Health::Done,
-            90,
-            format!(
-                "{why} — {} of {} rounds have failed",
-                tally.failures, tally.rounds
-            ),
-        ),
-        None => (Health::Stressed, 40, "not yet run".to_string()),
-    };
-
-    HealthRecord {
-        scope: scope.to_string(),
-        health,
-        severity,
-        evidence,
-        observed_unix_nanos: now,
-    }
-}
-
-/// Severity from the failure rate, 1..=80, for a pair that is passing now but
-/// has failed before. Never 0 (that is unblemished green) and never red's 90.
-fn rate_severity(tally: &Tally) -> u8 {
-    if tally.rounds == 0 {
-        return 40;
-    }
-
-    let rate = (tally.failures * 80) / tally.rounds;
-    rate.clamp(1, 80) as u8
-}
-
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
+    use crate::roundtrip::{FileRoundTrip, TIMEOUT, TcpRoundTrip, UdpRoundTrip};
+    use crate::storm::violations;
     use crate::support::scratch;
     use observe::Health;
+
+    const NODE: &str = "xmip:///playground";
+
+    fn sample(dir: &std::path::Path) -> Vec<Box<dyn RoundTrip>> {
+        vec![
+            Box::new(FileRoundTrip::new(dir)),
+            Box::new(TcpRoundTrip),
+            Box::new(UdpRoundTrip),
+        ]
+    }
+
+    /// Drive `schedule` for `rounds` under the storm's invariants: a tick
+    /// within `pairs * TIMEOUT * 3 / workers`, a reason on every verdict not
+    /// delivered, a rollup that tells the truth. Returns the last snapshot.
+    fn stress_rounds(schedule: &mut Schedule, rounds: u64) -> Snapshot {
+        let (pairs, workers) = schedule.shape();
+        let budget = TIMEOUT * 3 * u32::try_from(pairs).expect("few pairs")
+            / u32::try_from(workers).expect("few workers");
+        let mut snapshot = Snapshot::new();
+        for round in 1..=rounds {
+            let started = Instant::now();
+            snapshot = schedule.tick();
+            let took = started.elapsed();
+            assert!(
+                took <= budget,
+                "round {round} took {took:?}, budget {budget:?}"
+            );
+            let lying = violations(&snapshot, NODE);
+            assert!(lying.is_empty(), "round {round}: {}", lying.join("; "));
+        }
+        snapshot
+    }
+
+    #[test]
+    fn harsh_faults_sizes_and_workers_keep_the_invariants_and_leave_file_fine() {
+        let dir = scratch("harsh");
+        let mut schedule = Schedule::new(NODE, &dir)
+            .at(Stress::Harsh)
+            .over(sample(&dir));
+        assert_eq!(schedule.shape(), (3 * CONTRACTS.len(), 4));
+
+        let snapshot = stress_rounds(&mut schedule, Stress::Harsh.rounds());
+
+        assert_eq!(
+            snapshot.worst(NODE),
+            Some(Health::Holding),
+            "harsh faults surface"
+        );
+        let file: Vec<_> = snapshot
+            .health(&format!("{NODE}/receive/file"))
+            .into_iter()
+            .filter(|r| r.health != Health::Fine)
+            .collect();
+        assert!(
+            file.is_empty(),
+            "file's transport path carries no fault at any level: {file:?}"
+        );
+        // A datagram cannot carry sixteen bits plus one; that round is red
+        // with the transport's reason, not a hang and not a blank.
+        let udp = snapshot.health(&format!("{NODE}/receive/udp/bytes"));
+        assert!(
+            udp.iter()
+                .any(|r| r.health != Health::Fine && !r.evidence.is_empty()),
+            "{udp:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_verdicts_come_back_in_pair_order_whatever_thread_reached_them() {
+        let dir = scratch("order");
+        let schedule = Schedule::new(NODE, &dir)
+            .at(Stress::Harsh)
+            .over(sample(&dir));
+        let verdicts = schedule.run_once(1);
+        let expected: Vec<(String, Contract)> = ["file", "tcp", "udp"]
+            .into_iter()
+            .flat_map(|t| CONTRACTS.iter().map(move |&c| (t.to_string(), c)))
+            .collect();
+        let seen: Vec<(String, Contract)> = verdicts
+            .iter()
+            .filter(|v| v.stage == Stage::Receive && v.point.is_none())
+            .map(|v| (v.transport.clone(), v.contract))
+            .collect();
+        assert_eq!(seen, expected);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore = "brutal: the whole matrix at every core, for the runner"]
+    fn brutal_schedule_over_every_transport() {
+        let dir = scratch("brutal");
+        let mut schedule = Schedule::new(NODE, &dir).at(Stress::Brutal);
+        stress_rounds(&mut schedule, Stress::Brutal.rounds());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn a_tick_reports_every_pair_across_the_three_stages() {

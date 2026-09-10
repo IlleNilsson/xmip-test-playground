@@ -11,11 +11,13 @@
 //! through its framing over an in-memory line, CAN over the loopback bus.
 
 use std::io::BufReader;
+use std::net::UdpSocket;
 use std::sync::Arc;
 use std::time::Duration;
 
 use transport::Transport;
-use transport_bacnet::BacnetTransport;
+use transport::error::{classify, protocol_error};
+use transport_bacnet::{BacnetTransport, MAX_DATAGRAM, UNICAST, frame};
 use transport_can_bus::{Bus, CanTransport, Loopback};
 use transport_dnp3::Dnp3Transport;
 use transport_iec_60870_5_104::Iec104Transport;
@@ -70,9 +72,24 @@ impl RoundTrip for ModbusRoundTrip {
     }
 }
 
-/// BACnet/IP: bind a socket, send the payload as unicast NPDUs in order and an
-/// empty one to close, and receive until the empty one.
+/// BACnet/IP: bind a socket, send the payload as unicast NPDUs in order,
+/// each acknowledged with an empty NPDU back before the next goes — the
+/// Simple-ACK a confirmed service earns, at the layer this transport
+/// speaks — and an empty one to close; receive until the empty one. Sent
+/// unacknowledged, a burst of them is flow-controlled by nothing but the
+/// far end's socket buffer, and a mebibyte lost datagrams on loopback.
 pub struct BacnetRoundTrip;
+
+/// The empty NPDU back to whoever `origin` names.
+fn bacnet_acknowledge(socket: &UdpSocket, origin: &str) -> transport::Result<()> {
+    let peer = transport::socket::target("bacnet", origin)
+        .map(|(address, _)| address.split_once('?').map_or(address, |(peer, _)| peer))
+        .ok_or_else(|| protocol_error(format!("an origin that is not bacnet://: {origin}")))?;
+    socket
+        .send_to(&frame(UNICAST, &[])?, peer)
+        .map_err(|e| classify("acknowledging an NPDU", &e))?;
+    Ok(())
+}
 
 impl RoundTrip for BacnetRoundTrip {
     fn transport(&self) -> &'static str {
@@ -87,19 +104,29 @@ impl RoundTrip for BacnetRoundTrip {
         };
         let payload = payload.to_vec();
         let sender = std::thread::spawn(move || {
-            let sender = BacnetTransport::new("127.0.0.1:0");
-            for npdu in payload.chunks(transport_bacnet::MAX_DATAGRAM - 4) {
-                sender.send(&address, npdu)?;
+            let near_end = BacnetTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
+            let (own, _) = near_end.bind()?;
+            let close = std::iter::once(&[][..]);
+            for npdu in payload.chunks(MAX_DATAGRAM - 4).chain(close) {
+                own.send_to(&frame(UNICAST, npdu)?, &address)
+                    .map_err(|e| classify("sending an NPDU", &e))?;
+                near_end.receive_one(&own)?;
             }
-            sender.send(&address, &[])
+            Ok::<(), transport::TransportError>(())
         });
         let mut bytes = Vec::new();
         let caught = loop {
-            match far_end.receive_one(&socket) {
-                Ok(arrived) if arrived.bytes.is_empty() => break Ok(()),
-                Ok(arrived) => bytes.extend_from_slice(&arrived.bytes),
+            let arrived = match far_end.receive_one(&socket) {
+                Ok(arrived) => arrived,
                 Err(error) => break Err(error),
+            };
+            if let Err(error) = bacnet_acknowledge(&socket, &arrived.origin_uri) {
+                break Err(error);
             }
+            if arrived.bytes.is_empty() {
+                break Ok(());
+            }
+            bytes.extend_from_slice(&arrived.bytes);
         };
         match (caught, sender.join()) {
             (Ok(()), Ok(Ok(()))) => Exchange::Returned(bytes),
@@ -299,5 +326,35 @@ mod tests {
             b"seventeen bytes!!"
         );
         assert_eq!(returned(&CanRoundTrip, b""), b"");
+    }
+
+    #[test]
+    fn modbus_carries_the_edges() {
+        crate::support::carries_the_edges(&ModbusRoundTrip);
+    }
+
+    #[test]
+    fn bacnet_carries_the_edges() {
+        crate::support::carries_the_edges(&BacnetRoundTrip);
+    }
+
+    #[test]
+    fn serial_carries_the_edges() {
+        crate::support::carries_the_edges(&SerialRoundTrip);
+    }
+
+    #[test]
+    fn can_bus_carries_the_edges() {
+        crate::support::carries_the_edges(&CanRoundTrip);
+    }
+
+    #[test]
+    fn iec_104_carries_the_edges() {
+        crate::support::carries_the_edges(&Iec104RoundTrip);
+    }
+
+    #[test]
+    fn dnp3_carries_the_edges() {
+        crate::support::carries_the_edges(&Dnp3RoundTrip);
     }
 }

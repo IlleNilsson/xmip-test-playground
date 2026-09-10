@@ -49,3 +49,59 @@ pub(crate) fn files_whole(cabinet: &dyn crate::cabinet::Cabinet) {
         );
     }
 }
+
+/// Every edge payload under a transport's ceiling comes back whole, and every
+/// one above it is refused with a reason rather than hung on or panicked at.
+/// Shared by every adapter file, so every transport is judged the same way at
+/// the sizes protocols break on.
+#[cfg(test)]
+pub(crate) fn carries_the_edges(rt: &dyn crate::roundtrip::RoundTrip) {
+    use crate::roundtrip::Exchange;
+    for (name, bytes) in crate::stress::edge_payloads(None) {
+        let refused = rt.refuses(&bytes);
+        let started = std::time::Instant::now();
+        let exchange = rt.exchange(&bytes);
+        let took = started.elapsed();
+        assert!(
+            took < crate::roundtrip::TIMEOUT * 3,
+            "{} took {took:?} on {name}: a round is judged, never waited on",
+            rt.transport()
+        );
+        // A declared refusal must be true: the bytes really do not survive.
+        // The scenarios never send a refused payload (pingpong judges it
+        // one-sided first); here it is sent so an over-broad refusal shows.
+        if let Some(why) = refused {
+            assert!(
+                !matches!(&exchange, Exchange::Returned(back) if *back == bytes),
+                "{} declares it cannot carry {name} ({why}) yet returned it whole",
+                rt.transport()
+            );
+            continue;
+        }
+        match (rt.ceiling(), exchange) {
+            (Some(limit), Exchange::Returned(back)) if bytes.len() > limit => {
+                panic!(
+                    "{} returned {name} above its ceiling of {limit}: {}",
+                    rt.transport(),
+                    back.len()
+                )
+            }
+            (Some(limit), Exchange::Failed(_) | Exchange::OneSided(_)) if bytes.len() > limit => {}
+            (_, Exchange::Returned(back)) => {
+                assert!(
+                    back == bytes,
+                    "{} changed {name} ({} bytes)",
+                    rt.transport(),
+                    bytes.len()
+                );
+            }
+            (_, Exchange::OneSided(why) | Exchange::Failed(why)) => {
+                panic!(
+                    "{} did not carry {name} ({} bytes): {why}",
+                    rt.transport(),
+                    bytes.len()
+                )
+            }
+        }
+    }
+}

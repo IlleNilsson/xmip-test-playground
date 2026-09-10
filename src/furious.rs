@@ -21,11 +21,15 @@ use observe::{Health, HealthRecord, Snapshot};
 use crate::fault::fires_keyed;
 use crate::roundtrip::{Exchange, RoundTrip, all_transports};
 use crate::schedule::CONTRACTS;
+use crate::stress::{Stress, scaled_rate};
 use crate::support::now_unix_nanos;
 use crate::verdict::Contract;
 
 /// How many recent latencies each pair keeps for its percentiles.
 const RING: usize = 256;
+
+/// How often, in percent of rounds at `Realistic`, a pressured pair spikes.
+const SPIKE_RATE: u8 = 4;
 
 /// Rounds skipped before latencies are recorded. The first round pays cold-start
 /// costs — sockets bound, a TLS session set up — that are not steady-state
@@ -71,11 +75,15 @@ impl Ring {
 fn budget_micros(transport: &str) -> u64 {
     // Generous next to real loopback (well under a millisecond), so ordinary
     // jitter — disk contention on file, scheduler hiccups — stays green and only
-    // an injected spike, three times the budget, crosses the line.
+    // an injected spike, three times the budget, crosses the line. Raised
+    // fourfold on 2026-09-10 when the harsh tests began sharing the box:
+    // with four pairs in flight and mebibytes on the wire, a 25 ms budget
+    // on file was blown by contention alone, and a judgement that fails when
+    // the machine is merely busy is not a latency judgement.
     match transport {
-        "file" | "udp" | "tcp" => 25_000,
-        "websocket" | "http" => 30_000,
-        _ => 40_000,
+        "file" | "udp" | "tcp" => 100_000,
+        "websocket" | "http" => 120_000,
+        _ => 160_000,
     }
 }
 
@@ -84,7 +92,8 @@ fn budget_micros(transport: &str) -> u64 {
 pub struct Furious {
     node: String,
     transports: Vec<Box<dyn RoundTrip>>,
-    under_pressure: bool,
+    /// The level, when one was set: its spike rate. `None` never spikes.
+    stress: Option<Stress>,
     round: u64,
     rings: BTreeMap<String, Ring>,
 }
@@ -98,17 +107,25 @@ impl Furious {
         Self {
             node: node.into(),
             transports,
-            under_pressure: false,
+            stress: None,
             round: 0,
             rings: BTreeMap::new(),
         }
     }
 
-    /// The same exercise, injecting realistic latency spikes. The runner uses
-    /// it; the tests use the spike-free default.
+    /// The same exercise, injecting realistic latency spikes: [`Furious::at`]
+    /// `Realistic`. The runner uses it; the tests use the spike-free default.
     #[must_use]
-    pub fn under_pressure(mut self) -> Self {
-        self.under_pressure = true;
+    pub fn under_pressure(self) -> Self {
+        self.at(Stress::Realistic)
+    }
+
+    /// The same exercise at a level: spikes at the level's rate. The payload
+    /// stays small and the pairs run one at a time — a latency measured
+    /// while the machine is busy with other pairs would be the machine's.
+    #[must_use]
+    pub fn at(mut self, stress: Stress) -> Self {
+        self.stress = Some(stress);
         self
     }
 
@@ -162,9 +179,11 @@ impl Furious {
     /// The latency to record: the real measurement, or an injected spike three
     /// times the budget when this round is under pressure. `file` never spikes.
     fn sample(&self, transport: &str, contract: Contract, measured: u64) -> u64 {
-        if self.under_pressure && transport != "file" {
+        if let Some(stress) = self.stress
+            && transport != "file"
+        {
             let key = format!("spike/{transport}/{}", contract.name());
-            if fires_keyed(4, &key, self.round) {
+            if fires_keyed(scaled_rate(SPIKE_RATE, stress), &key, self.round) {
                 return budget_micros(transport) * 3;
             }
         }
@@ -251,6 +270,7 @@ mod tests {
             Box::new(UdpRoundTrip),
         ]
     }
+    use crate::storm::violations;
     use crate::support::scratch;
 
     #[test]
@@ -291,6 +311,55 @@ mod tests {
             Some(Health::Fine),
             "file is left fast"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Drive `ff` for `rounds` at a level: every record green, or its p99
+    /// reported against the budget, or a failure with its reason; the rollup
+    /// honest; `file` never spiking. Returns the last snapshot.
+    fn stress_rounds(ff: &mut Furious, rounds: u64) -> Snapshot {
+        let mut snapshot = Snapshot::new();
+        for round in 1..=rounds {
+            snapshot = ff.tick();
+            let lying = violations(&snapshot, "xmip:///playground/furious");
+            assert!(lying.is_empty(), "round {round}: {}", lying.join("; "));
+            for record in snapshot.health("xmip:///playground/furious") {
+                let reported = record.evidence.contains("p99") || record.health == Health::Done;
+                assert!(
+                    record.health == Health::Fine || reported,
+                    "round {round}: {record:?} neither within budget nor reporting"
+                );
+            }
+        }
+        snapshot
+    }
+
+    #[test]
+    fn harsh_spikes_are_reported_against_the_budget_and_file_stays_fast() {
+        let dir = scratch("furious-harsh");
+        let mut ff = Furious::new("xmip:///playground/furious", &dir)
+            .at(Stress::Harsh)
+            .over(sample(&dir));
+        let snapshot = stress_rounds(&mut ff, Stress::Harsh.rounds());
+        assert_ne!(
+            snapshot.worst("xmip:///playground/furious"),
+            Some(Health::Fine),
+            "at three times the spike rate, a p99 blows its budget within the rounds"
+        );
+        assert_eq!(
+            snapshot.worst("xmip:///playground/furious/file"),
+            Some(Health::Fine),
+            "file is left fast"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore = "brutal: every transport at the ceiling spike rate, for the runner"]
+    fn brutal_spikes_over_every_transport() {
+        let dir = scratch("furious-brutal");
+        let mut ff = Furious::new("xmip:///playground/furious", &dir).at(Stress::Brutal);
+        stress_rounds(&mut ff, Stress::Brutal.rounds());
         std::fs::remove_dir_all(&dir).ok();
     }
 

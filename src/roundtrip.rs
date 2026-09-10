@@ -18,12 +18,8 @@ use std::time::Duration;
 
 use transport::Transport;
 use transport_file::FileTransport;
-use transport_http::HttpTransport;
-use transport_mllp::MllpTransport;
-use transport_smtp::SmtpTransport;
 use transport_tcp::TcpTransport;
 use transport_udp::UdpTransport;
-use transport_websocket::WebSocketTransport;
 
 /// What one round returned.
 pub enum Exchange {
@@ -42,10 +38,33 @@ pub enum Exchange {
 /// enough that a matrix of hundreds of pairs stays a test.
 pub const TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A transport the pingpong scenario can drive, behind one method.
-pub trait RoundTrip {
+/// A transport the pingpong scenario can drive, behind one method. `Send`
+/// and `Sync` so a schedule can drive pairs from several threads at once —
+/// an adapter holds a directory or nothing, never a live socket.
+pub trait RoundTrip: Send + Sync {
     /// The transport token, as it appears in a scope and a repository name.
     fn transport(&self) -> &'static str;
+
+    /// The largest payload this transport carries whole in one round, or
+    /// `None` when it carries any. A datagram protocol has one — 65 507
+    /// bytes of UDP, less what its own header takes — and above it the
+    /// adapter answers a refusal with a reason, never a hang. The stress
+    /// tests drive every edge payload under the ceiling and expect it back,
+    /// and every one above it and expect the refusal.
+    fn ceiling(&self) -> Option<usize> {
+        None
+    }
+
+    /// Why this transport cannot carry `payload` as it is, or `None` when it
+    /// can. A ceiling is about size; this is about content — a mail path
+    /// canonicalises line endings, an MLLP block cannot hold its own
+    /// terminator. A refusal is judged one-sided, yellow with the reason:
+    /// the transport declares the shape it does not carry rather than
+    /// changing the bytes and calling that delivered.
+    fn refuses(&self, payload: &[u8]) -> Option<String> {
+        let _ = payload;
+        None
+    }
 
     /// Send `payload` and return what came back. The adapter does whatever its
     /// transport needs — a directory read-back, a listen-and-accept, a
@@ -61,11 +80,11 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
     vec![
         Box::new(FileRoundTrip::new(file_dir)),
         Box::new(TcpRoundTrip),
-        Box::new(HttpRoundTrip),
-        Box::new(SmtpRoundTrip),
+        Box::new(crate::reply::HttpRoundTrip),
+        Box::new(crate::reply::SmtpRoundTrip),
         Box::new(UdpRoundTrip),
-        Box::new(WebSocketRoundTrip),
-        Box::new(MllpRoundTrip),
+        Box::new(crate::reply::WebSocketRoundTrip),
+        Box::new(crate::reply::MllpRoundTrip),
         Box::new(crate::industrial::ModbusRoundTrip),
         Box::new(crate::industrial::BacnetRoundTrip),
         Box::new(crate::industrial::SerialRoundTrip),
@@ -97,8 +116,8 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
         Box::new(crate::broker::PostgresqlRoundTrip),
         Box::new(crate::discovery::SsdpRoundTrip),
         Box::new(crate::discovery::MdnsRoundTrip),
-        Box::new(crate::discovery::DhcpRoundTrip),
-        Box::new(crate::discovery::SnmpRoundTrip),
+        Box::new(crate::management::DhcpRoundTrip),
+        Box::new(crate::management::SnmpRoundTrip),
     ]
 }
 
@@ -133,38 +152,6 @@ where
     }
 }
 
-/// MLLP: bind a listener, send one framed message from another thread, accept
-/// it, acknowledge on the same connection, and read the message back. The tcp
-/// shape with HL7's framing on top and the acknowledgement the sender waits for.
-pub struct MllpRoundTrip;
-
-impl RoundTrip for MllpRoundTrip {
-    fn transport(&self) -> &'static str {
-        "mllp"
-    }
-
-    fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = MllpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-        let timeout = TIMEOUT;
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| {
-                let (arrived, mut connection) = far_end.accept_one(listener)?;
-                // The acknowledgement is HL7's to compose; the probe answers with
-                // the bytes it got, which proves the reply channel and nothing more.
-                transport_mllp::acknowledge(&mut connection, &arrived.bytes)?;
-                Ok(arrived)
-            },
-            |address| transport_mllp::send_and_receive(address, payload, Some(timeout)).map(|_| ()),
-        )
-    }
-}
-
 /// File: send into a directory, read it back from the same directory. The
 /// self-contained case, and the reason file was first.
 pub struct FileRoundTrip {
@@ -184,7 +171,16 @@ impl RoundTrip for FileRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let transport = FileTransport::new(&self.dir);
+        // One directory per thread: pairs driven at once from several
+        // threads would otherwise pick up each other's file and report it as
+        // "sent, but it did not come back" (found at Harsh, 2026-09-10). Per
+        // thread rather than per exchange so the directory is made once and
+        // the round stays as fast as the file transport is.
+        let dir = self.dir.join(format!("t{:?}", std::thread::current().id()));
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            return Exchange::Failed(format!("creating the exchange directory: {error}"));
+        }
+        let transport = FileTransport::new(&dir);
 
         if let Err(error) = transport.send("pingpong", payload) {
             return Exchange::Failed(format!("send failed: {error}"));
@@ -227,139 +223,15 @@ impl RoundTrip for TcpRoundTrip {
     }
 }
 
-/// HTTP: bind a listener, send the payload as a request body from another
-/// thread, accept the one request and read the body back. The tcp shape with
-/// HTTP framing on top — the server writes a response, so the sender's `send`
-/// completes rather than blocking on a reply.
-pub struct HttpRoundTrip;
-
-impl HttpRoundTrip {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for HttpRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RoundTrip for HttpRoundTrip {
-    fn transport(&self) -> &'static str {
-        "http"
-    }
-
-    fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = HttpTransport::new("127.0.0.1:0");
-
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| far_end.accept_one(listener),
-            |address| {
-                HttpTransport::new("127.0.0.1:0")
-                    .send(&format!("http://{address}/pingpong"), payload)
-            },
-        )
-    }
-}
-
-/// SMTP: bind a receiver, relay the payload as one message from another thread,
-/// accept the one session and read the message body back.
-pub struct SmtpRoundTrip;
-
-impl SmtpRoundTrip {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for SmtpRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RoundTrip for SmtpRoundTrip {
-    fn transport(&self) -> &'static str {
-        "smtp"
-    }
-
-    fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = SmtpTransport::receiving("127.0.0.1:0");
-
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| far_end.accept_one(listener),
-            |address| {
-                SmtpTransport::sending(address.to_string(), "xmip@example.com")
-                    .send("mailto:pingpong@example.com", payload)
-            },
-        )
-    }
-}
-
-/// WebSocket: the http upgrade shape. Bind, then from another thread connect,
-/// complete the opening handshake and send one frame; accept the connection,
-/// finish the handshake, read the frame.
-pub struct WebSocketRoundTrip;
-
-impl WebSocketRoundTrip {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for WebSocketRoundTrip {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RoundTrip for WebSocketRoundTrip {
-    fn transport(&self) -> &'static str {
-        "websocket"
-    }
-
-    fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = WebSocketTransport::new("127.0.0.1:0");
-
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| far_end.accept_one(listener),
-            |address| {
-                WebSocketTransport::new("127.0.0.1:0")
-                    .send(&format!("ws://{address}/pingpong"), payload)
-            },
-        )
-    }
-}
+/// The most one IPv4 datagram carries: 65 535 less the twenty bytes of the
+/// IP header and the eight of the UDP header (RFC 791, RFC 768).
+const UDP_DATAGRAM: usize = 65_507;
 
 /// UDP: bind the receiving socket first (a datagram fired before the receiver
 /// is bound is dropped silently), learn its address, fire one datagram from
 /// another thread, receive it. A read timeout keeps a lost datagram from
-/// hanging the round — UDP has no delivery guarantee.
+/// hanging the round — UDP has no delivery guarantee. A payload over
+/// [`UDP_DATAGRAM`] is refused before anything waits on it.
 pub struct UdpRoundTrip;
 
 impl RoundTrip for UdpRoundTrip {
@@ -367,7 +239,17 @@ impl RoundTrip for UdpRoundTrip {
         "udp"
     }
 
+    fn ceiling(&self) -> Option<usize> {
+        Some(UDP_DATAGRAM)
+    }
+
     fn exchange(&self, payload: &[u8]) -> Exchange {
+        if payload.len() > UDP_DATAGRAM {
+            return Exchange::Failed(format!(
+                "{} bytes is over the {UDP_DATAGRAM} one datagram carries",
+                payload.len()
+            ));
+        }
         let far_end = UdpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
 
         // Bind before the sender fires, or the datagram is gone.
@@ -434,26 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn http_round_trips_a_body() {
-        let rt = HttpRoundTrip;
-
-        match rt.exchange(b"<order/>") {
-            Exchange::Returned(bytes) => assert_eq!(bytes, b"<order/>"),
-            other => panic!("expected Returned, got {}", label(&other)),
-        }
-    }
-
-    #[test]
-    fn smtp_round_trips_a_message() {
-        let rt = SmtpRoundTrip;
-
-        match rt.exchange(b"Subject: ping\r\n\r\npong") {
-            Exchange::Returned(bytes) => assert_eq!(bytes, b"Subject: ping\r\n\r\npong"),
-            other => panic!("expected Returned, got {}", label(&other)),
-        }
-    }
-
-    #[test]
     fn udp_round_trips_a_datagram() {
         let rt = UdpRoundTrip;
         let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
@@ -465,14 +327,24 @@ mod tests {
     }
 
     #[test]
-    fn websocket_round_trips_a_frame() {
-        let rt = WebSocketRoundTrip;
-        let payload = [0x00u8, 0x01, 0x02, 0xfd, 0xfe, 0xff];
+    fn file_carries_the_edges() {
+        let dir = scratch("file-edges");
+        crate::support::carries_the_edges(&FileRoundTrip::new(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
-        match rt.exchange(&payload) {
-            Exchange::Returned(bytes) => assert_eq!(bytes, payload),
-            other => panic!("expected Returned, got {}", label(&other)),
-        }
+    #[test]
+    fn tcp_carries_the_edges() {
+        crate::support::carries_the_edges(&TcpRoundTrip);
+    }
+
+    #[test]
+    fn udp_carries_the_edges() {
+        crate::support::carries_the_edges(&UdpRoundTrip);
+        let brim = crate::stress::patterned(UDP_DATAGRAM);
+        assert!(matches!(UdpRoundTrip.exchange(&brim), Exchange::Returned(back) if back == brim));
+        let over = vec![0u8; UDP_DATAGRAM + 1];
+        assert!(matches!(UdpRoundTrip.exchange(&over), Exchange::Failed(_)));
     }
 
     fn label(exchange: &Exchange) -> String {

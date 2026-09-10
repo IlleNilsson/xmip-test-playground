@@ -237,4 +237,24 @@ mod tests {
         assert_eq!(returned(&WebDavRoundTrip, &long), long);
         assert_eq!(returned(&WebDavRoundTrip, b""), b"");
     }
+
+    #[test]
+    fn s3_carries_the_edges() {
+        crate::support::carries_the_edges(&S3RoundTrip);
+    }
+
+    #[test]
+    fn azure_blob_carries_the_edges() {
+        crate::support::carries_the_edges(&AzureBlobRoundTrip);
+    }
+
+    #[test]
+    fn google_cloud_storage_carries_the_edges() {
+        crate::support::carries_the_edges(&GcsRoundTrip);
+    }
+
+    #[test]
+    fn webdav_carries_the_edges() {
+        crate::support::carries_the_edges(&WebDavRoundTrip);
+    }
 }

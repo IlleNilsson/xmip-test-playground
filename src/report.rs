@@ -15,10 +15,10 @@
 use std::io;
 use std::path::Path;
 
-use observe::{Activity, Counted, Health, History, ItemKind, Snapshot};
-use serde::Serialize;
+use observe::{Activity, Count, Counted, Health, HealthRecord, History, ItemKind, Snapshot};
+use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SnapshotReport {
     source: String,
     node: String,
@@ -26,7 +26,7 @@ struct SnapshotReport {
     counts: Vec<CountReport>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RecordReport {
     scope: String,
     state: String,
@@ -35,7 +35,7 @@ struct RecordReport {
     observed_unix_nanos: i64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct CountReport {
     counted: String,
     value: u64,
@@ -109,6 +109,53 @@ pub fn to_toml(node: &str, snapshot: &Snapshot) -> String {
     };
 
     toml::to_string(&report).unwrap_or_default()
+}
+
+/// The snapshot a node published, read back from the TOML [`to_toml`] wrote —
+/// the other half of the bridge, for a surface assembling a cluster from the
+/// files its nodes wrote (ADR-0027 decision 8). The counts come back at the
+/// node's own scope, dated by the newest record; a mood or a counted kind the
+/// reader does not know is skipped rather than guessed at.
+///
+/// # Errors
+///
+/// When the text is not the TOML this module writes.
+pub fn from_toml(text: &str) -> Result<Snapshot, toml::de::Error> {
+    let report: SnapshotReport = toml::from_str(text)?;
+    let mut snapshot = Snapshot::new();
+    let newest = report
+        .records
+        .iter()
+        .map(|record| record.observed_unix_nanos)
+        .max()
+        .unwrap_or(0);
+
+    for record in report.records {
+        if let Some(health) = health_named(&record.state) {
+            snapshot.record_health(HealthRecord {
+                scope: record.scope,
+                health,
+                severity: record.severity,
+                evidence: record.evidence,
+                observed_unix_nanos: record.observed_unix_nanos,
+            });
+        }
+    }
+
+    for count in report.counts {
+        if let Some(counted) = counted_named(&count.counted) {
+            snapshot.record_count(Count {
+                scope: report.node.clone(),
+                counted,
+                value: count.value,
+                window_start_unix_nanos: newest,
+                window_end_unix_nanos: newest,
+                observed_unix_nanos: newest,
+            });
+        }
+    }
+
+    Ok(snapshot)
 }
 
 /// The node's throughput over time as the TOML the history cmdlet and UI read:
@@ -191,6 +238,31 @@ const fn state(health: Health) -> &'static str {
     }
 }
 
+fn health_named(state: &str) -> Option<Health> {
+    [
+        Health::Fine,
+        Health::Paused,
+        Health::Working,
+        Health::Stressed,
+        Health::Exhausted,
+        Health::Holding,
+        Health::Done,
+    ]
+    .into_iter()
+    .find(|health| self::state(*health) == state)
+}
+
+fn counted_named(name: &str) -> Option<Counted> {
+    [
+        Counted::Streams,
+        Counted::Messages,
+        Counted::Journeys,
+        Counted::Bytes,
+    ]
+    .into_iter()
+    .find(|counted| counted_name(*counted) == name)
+}
+
 const fn kind_name(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Stream => "stream",
@@ -226,6 +298,30 @@ mod tests {
         assert_eq!(parsed["node"].as_str(), Some("xmip:///playground"));
         assert!(!parsed["records"].as_array().expect("records").is_empty());
         assert!(!parsed["counts"].as_array().expect("counts").is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_written_snapshot_reads_back_whole() {
+        let dir = std::env::temp_dir().join("xmip-report-readback-test");
+        std::fs::remove_dir_all(&dir).ok();
+        let mut schedule = Schedule::new("xmip:///playground", &dir);
+        let written = schedule.tick();
+
+        let read = from_toml(&to_toml("xmip:///playground", &written)).expect("reads back");
+
+        let before: Vec<_> = written.health("xmip:///playground");
+        let after: Vec<_> = read.health("xmip:///playground");
+        assert_eq!(before, after, "every record survives the round trip");
+        assert_eq!(
+            read.measure("xmip:///playground", Counted::Bytes)
+                .map(|count| count.value),
+            written
+                .measure("xmip:///playground", Counted::Bytes)
+                .map(|count| count.value),
+            "the node's counts survive at the node's scope"
+        );
+        assert!(from_toml("not = [toml").is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

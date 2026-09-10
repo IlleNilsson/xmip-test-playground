@@ -14,33 +14,47 @@
 //!
 //! It runs over the file substrate: a reader claims an item by **atomically
 //! creating its lock** (`create_new`, `O_EXCL`), which lets exactly one creator
-//! win even under real thread contention — a rename to a per-reader name does
-//! not, as two readers can each move a source they both still see. Competing
-//! reader threads race for a shared directory; under pressure the atomic claim is
+//! win even under real contention — a rename to a per-reader name does not, as
+//! two readers can each move a source they both still see. Competing reader
+//! threads race for a shared directory; under pressure the atomic claim is
 //! removed, so a second reader grabs the same item and the breach shows. The
 //! claim is transport-agnostic — any other pollable transport gets this exercise
 //! by adding a `RoundTrip` adapter, no change here, so no protocol is named in
 //! this code.
+//!
+//! **Across processes, 2026-09-09.** A [`Claim::shared`] exercise lays its items
+//! in a *lane* — `<dir>/<style>/<pid>-<round>/` — beside every other process's
+//! lanes, and its readers scan them all, so the contention is between real
+//! System Processes (ADR-0028 clause 2), which is the property `O_EXCL` exists
+//! to prove. Every holder writes a *done* record beside the item it processed,
+//! honest or not, and the process that dropped the items judges from those
+//! records once its lane is drained by whoever got there first. A lost race —
+//! an item gone before it could be read, a lane torn down under a straggler —
+//! is a normal outcome, never an error.
 
-use std::collections::BTreeMap;
+mod pickup;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::AtomicU64;
+use std::time::{Duration, Instant};
 
 use observe::{HealthRecord, Snapshot};
 
 use crate::fault::fires_keyed;
 use crate::standing::{Mark, Standing};
+use crate::stress::{Stress, scaled_rate};
 use crate::support::now_unix_nanos;
+use pickup::{Processed, Reader, ledger, list, remove_lane, stage_lane};
 
 /// Competing reader threads per round.
 const READERS: usize = 4;
-/// Order keys, and items per key. Small, so a round is quick.
-const KEYS: usize = 2;
-const PER_KEY: usize = 3;
 /// Percent of rounds a pressured run drops the atomic claim, so the board mostly
 /// holds and a breach surfaces now and then rather than every round.
 const BREACH_RATE: u8 = 12;
+/// How long a shared judge waits for the fleet to drain its lane before it
+/// calls what remains missed.
+const DRAIN_WAIT: Duration = Duration::from_secs(2);
 
 /// The transport substrate the claim runs over: the file directory, the one
 /// pollable transport with an adapter. Named because it is implemented; no
@@ -72,16 +86,6 @@ impl Style {
     }
 }
 
-/// One item processed by one reader, in the global order it happened.
-#[derive(Clone)]
-struct Processed {
-    item: String,
-    key: usize,
-    seq: usize,
-    reader: usize,
-    order: u64,
-}
-
 /// What a round concluded for one style.
 enum Verdict {
     Held(String),
@@ -89,34 +93,58 @@ enum Verdict {
     Missed(String),
 }
 
-/// The claim exercise: each round drops keyed items into a directory and races
-/// reader threads for them, one style at a time.
+/// The claim exercise: each round drops keyed items into a lane and races
+/// reader threads — and, when shared, every other process's readers — for
+/// them, one style at a time.
 pub struct Claim {
     node: String,
     dir: PathBuf,
+    tag: String,
+    shared: bool,
     round: u64,
-    under_pressure: bool,
+    rate: u8,
     standings: BTreeMap<String, Standing>,
 }
 
 impl Claim {
-    /// A claim exercise publishing under `node`, using `dir` for the shared
-    /// pickup directory, with the atomic claim intact.
+    /// A claim exercise publishing under `node`, using `dir` for the pickup
+    /// directory, with the atomic claim intact and no other process in it.
     #[must_use]
     pub fn new(node: impl Into<String>, dir: impl Into<PathBuf>) -> Self {
         Self {
             node: node.into(),
             dir: dir.into(),
+            tag: std::process::id().to_string(),
+            shared: false,
             round: 0,
-            under_pressure: false,
+            rate: 0,
             standings: BTreeMap::new(),
         }
     }
 
-    /// The same exercise with the atomic claim removed, so a breach occurs.
+    /// The same exercise over a directory other processes share: this
+    /// process's readers scan every lane, and its lane is drained by whichever
+    /// process gets there first.
+    #[must_use]
+    pub fn shared(node: impl Into<String>, dir: impl Into<PathBuf>) -> Self {
+        let mut claim = Self::new(node, dir);
+        claim.shared = true;
+        claim
+    }
+
+    /// The same exercise with the atomic claim removed now and then, so a
+    /// breach occurs.
     #[must_use]
     pub fn under_pressure(mut self) -> Self {
-        self.under_pressure = true;
+        self.rate = BREACH_RATE;
+        self
+    }
+
+    /// The breach rate scaled to a stress level: none at `Calm`, the realistic
+    /// rate at `Realistic`, more above.
+    #[must_use]
+    pub fn at(mut self, stress: Stress) -> Self {
+        self.rate = scaled_rate(BREACH_RATE, stress);
         self
     }
 
@@ -134,47 +162,52 @@ impl Claim {
         snapshot
     }
 
-    /// Run the real pickup for one style over FILE, and judge it.
+    /// Run the real pickup for one style over the file substrate, and judge it.
     fn exercise(&self, style: Style) -> Verdict {
-        let round_dir = self.dir.join(format!("{}-{}", style.name(), self.round));
-        std::fs::remove_dir_all(&round_dir).ok();
-        if std::fs::create_dir_all(&round_dir).is_err() {
-            return Verdict::Missed("could not create the pickup directory".to_string());
-        }
+        let style_dir = self.dir.join(style.name());
+        let lane = style_dir.join(format!("{}-{}", self.tag, self.round));
+        let Some(dropped) = stage_lane(&lane) else {
+            return Verdict::Missed("could not create the pickup lane".to_string());
+        };
 
-        let dropped = drop_items(&round_dir);
-        let broken = self.under_pressure
-            && fires_keyed(BREACH_RATE, &format!("breach/{}", style.name()), self.round);
-        let processed = Self::race(&round_dir, style, broken);
-        std::fs::remove_dir_all(&round_dir).ok();
-
-        judge(style, dropped, &processed)
+        let broken = fires_keyed(self.rate, &format!("breach/{}", style.name()), self.round);
+        self.race(&style_dir, &lane, style, broken);
+        let processed = self.settle(&lane);
+        let verdict = judge(style, dropped, &processed);
+        remove_lane(&lane);
+        verdict
     }
 
-    /// Race `READERS` threads for the items, and return what each processed.
-    fn race(dir: &Path, style: Style, broken: bool) -> Vec<Processed> {
-        let log = Arc::new(Mutex::new(Vec::<Processed>::new()));
-        let clock = Arc::new(AtomicU64::new(0));
-
+    /// Race `READERS` threads for the items in every lane this process scans.
+    fn race(&self, style_dir: &Path, own: &Path, style: Style, broken: bool) {
+        let clock = AtomicU64::new(0);
         std::thread::scope(|scope| {
-            for reader in 0..READERS {
-                let log = Arc::clone(&log);
-                let clock = Arc::clone(&clock);
-                scope.spawn(move || {
-                    if broken {
-                        read_without_claiming(dir, reader, &log, &clock);
-                    } else if style.ordered() {
-                        claim_per_key(dir, reader, &log, &clock);
-                    } else {
-                        claim_per_item(dir, reader, &log, &clock);
-                    }
-                });
+            for index in 0..READERS {
+                let reader = Reader {
+                    holder: format!("{}-{index}", self.tag),
+                    clock: &clock,
+                    shared: self.shared,
+                    style_dir,
+                    own,
+                };
+                scope.spawn(move || reader.run(style.ordered(), broken));
             }
         });
+    }
 
-        Arc::try_unwrap(log)
-            .map(|mutex| mutex.into_inner().unwrap_or_default())
-            .unwrap_or_default()
+    /// The ledger for this process's lane once it is drained — by these
+    /// readers, or by any other process's — or once a breach is already
+    /// visible, or once the wait runs out.
+    fn settle(&self, lane: &Path) -> Vec<Processed> {
+        let started = Instant::now();
+        loop {
+            let processed = ledger(lane);
+            let drained = list(lane, "item_").is_empty();
+            if !self.shared || drained || duplicated(&processed) || started.elapsed() > DRAIN_WAIT {
+                return processed;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn fold(&mut self, style: Style, verdict: Verdict, now: i64) -> HealthRecord {
@@ -191,139 +224,36 @@ impl Claim {
     }
 }
 
-/// Drop `KEYS` × `PER_KEY` items, named `item_<key>_<seq>`, each carrying nothing
-/// but its name — the pickup, not the content, is the subject.
-fn drop_items(dir: &Path) -> usize {
-    let mut count = 0;
-    for key in 0..KEYS {
-        for seq in 0..PER_KEY {
-            let path = dir.join(format!("item_{key}_{seq}"));
-            if std::fs::write(&path, b"x").is_ok() {
-                count += 1;
-            }
-        }
-    }
-    count
-}
-
-/// The honest per-item claim: win the item by atomically creating its lock —
-/// `create_new` is `O_EXCL`, so exactly one creator wins even under real thread
-/// contention (a rename to a per-reader name is not; two can both move a source
-/// they each still see). The winner records it and removes it. Parallel and
-/// Concurrent.
-fn claim_per_item(dir: &Path, reader: usize, log: &Mutex<Vec<Processed>>, clock: &AtomicU64) {
-    // Bounded so a held-but-not-yet-removed item can never spin forever; the
-    // items are few, so this is far more headroom than needed.
-    for _ in 0..64 {
-        let items = list(dir, "item_");
-        if items.is_empty() {
-            break;
-        }
-        for path in items {
-            if claimed(&path.with_extension("lock")) {
-                record(&path, reader, log, clock);
-                std::fs::remove_file(&path).ok();
-            }
-        }
-    }
-}
-
-/// The honest per-key claim: win the key by atomically creating its lock, then
-/// drain the key's items in sequence. One holder per key keeps the order.
-/// Sequential.
-fn claim_per_key(dir: &Path, reader: usize, log: &Mutex<Vec<Processed>>, clock: &AtomicU64) {
-    for key in 0..KEYS {
-        if claimed(&dir.join(format!("key_{key}.lock"))) {
-            for seq in 0..PER_KEY {
-                let path = dir.join(format!("item_{key}_{seq}"));
-                record(&path, reader, log, clock);
-                std::fs::remove_file(&path).ok();
-            }
-        }
-    }
-}
-
-/// Atomically take a lock: `true` for the one creator, `false` for everyone else.
-fn claimed(lock: &Path) -> bool {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock)
-        .is_ok()
-}
-
-/// The broken claim under pressure: read and process without any atomic step, so
-/// every reader takes every item. The breach the scenario exists to catch.
-fn read_without_claiming(
-    dir: &Path,
-    reader: usize,
-    log: &Mutex<Vec<Processed>>,
-    clock: &AtomicU64,
-) {
-    for path in list(dir, "item_") {
-        record(&path, reader, log, clock);
-    }
-}
-
-fn list(dir: &Path, prefix: &str) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(prefix) && !name.contains('.'))
-        })
-        .collect()
-}
-
-fn record(path: &Path, reader: usize, log: &Mutex<Vec<Processed>>, clock: &AtomicU64) {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let (key, seq) = parse(&name);
-    let order = clock.fetch_add(1, Ordering::SeqCst);
-    if let Ok(mut log) = log.lock() {
-        log.push(Processed {
-            item: name,
-            key,
-            seq,
-            reader,
-            order,
-        });
-    }
-}
-
-/// `item_<key>_<seq>` → (key, seq); zeros if it does not parse.
-fn parse(name: &str) -> (usize, usize) {
-    let mut parts = name.trim_start_matches("item_").split('_');
-    let key = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let seq = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    (key, seq)
-}
-
-/// Judge a round: every item claimed by exactly one reader (the claim), none
-/// missed, and — for Sequential — each key processed in order.
-fn judge(style: Style, dropped: usize, processed: &[Processed]) -> Verdict {
-    use std::collections::BTreeMap as Map;
-
-    let mut holders: Map<&str, std::collections::BTreeSet<usize>> = Map::new();
+/// Item → the holders that processed it.
+fn holders(processed: &[Processed]) -> BTreeMap<&str, BTreeSet<&str>> {
+    let mut holders: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for record in processed {
         holders
             .entry(&record.item)
             .or_default()
-            .insert(record.reader);
+            .insert(&record.holder);
     }
+    holders
+}
+
+fn duplicated(processed: &[Processed]) -> bool {
+    holders(processed).values().any(|who| who.len() > 1)
+}
+
+/// Judge a round: every item claimed by exactly one holder (the claim), none
+/// missed, and — for Sequential — each key processed in order. A breach the
+/// playground injected says so, so an operator can tell it from a real one.
+fn judge(style: Style, dropped: usize, processed: &[Processed]) -> Verdict {
+    let holders = holders(processed);
 
     if let Some((item, who)) = holders.iter().find(|(_, who)| who.len() > 1) {
+        let names: Vec<&str> = who.iter().copied().collect();
+        let injected = processed.iter().any(|record| record.injected);
+        let note = if injected { " (injected)" } else { "" };
         return Verdict::Contended(format!(
-            "{item} was claimed by {} readers at once",
-            who.len()
+            "{item} was claimed by {} holders at once: {}{note}",
+            who.len(),
+            names.join(", ")
         ));
     }
 
@@ -338,20 +268,28 @@ fn judge(style: Style, dropped: usize, processed: &[Processed]) -> Verdict {
         return Verdict::Contended("the sequence was reordered under contention".to_string());
     }
 
+    let owners: BTreeSet<&str> = processed
+        .iter()
+        .filter_map(|record| record.holder.split_once('-'))
+        .map(|(process, _)| process)
+        .collect();
     let note = if style.ordered() {
         ", in order per key"
     } else {
         ""
     };
-    Verdict::Held(format!("{dropped} items, one holder each{note}"))
+    Verdict::Held(format!(
+        "{dropped} items, one holder each{note}, {} process(es)",
+        owners.len()
+    ))
 }
 
 /// Whether each key's items were processed in non-decreasing sequence.
 fn ordered_per_key(processed: &[Processed]) -> bool {
-    let mut order = processed.to_vec();
+    let mut order: Vec<&Processed> = processed.iter().collect();
     order.sort_by_key(|record| record.order);
 
-    let mut last: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    let mut last: BTreeMap<usize, usize> = BTreeMap::new();
     for record in order {
         let previous = last.insert(record.key, record.seq);
         if let Some(previous) = previous
@@ -366,6 +304,7 @@ fn ordered_per_key(processed: &[Processed]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::from_toml;
     use crate::support::scratch;
     use observe::Health;
 
@@ -419,6 +358,82 @@ mod tests {
                 Some(Health::Fine),
                 "{style} holds the claim"
             );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn calm_leaves_the_claim_intact_and_stress_scales_the_breach() {
+        assert_eq!(Claim::new("n", "d").at(Stress::Calm).rate, 0);
+        assert_eq!(Claim::new("n", "d").at(Stress::Realistic).rate, BREACH_RATE);
+        assert!(Claim::new("n", "d").at(Stress::Harsh).rate > BREACH_RATE);
+    }
+
+    /// Two real System Processes over one shared directory: the property
+    /// ADR-0024's claim exists to prove, `O_EXCL` across processes. The test
+    /// stages a lane of a thousand items both nodes find on their first scan,
+    /// so their readers contend for the same items, and judges the ledger
+    /// itself; both nodes' own verdicts must hold as well.
+    #[test]
+    fn two_processes_never_both_claim_the_same_item() {
+        let dir = scratch("two-processes");
+        let shared = dir.join("shared");
+        let contended = shared.join("claim/parallel/contended-0");
+        let staging = contended.with_file_name(".contended-0");
+        std::fs::create_dir_all(&staging).expect("staging dir");
+        for n in 0..1_000 {
+            std::fs::write(staging.join(format!("item_0_{n}")), b"x").expect("an item");
+        }
+        std::fs::rename(&staging, &contended).expect("the lane into place");
+        let node = crate::fleet::built_node_binary();
+
+        let children: Vec<std::process::Child> = ["left", "right"]
+            .iter()
+            .map(|name| {
+                std::process::Command::new(&node)
+                    .args(["--name", name, "--stress", "calm", "--rounds", "4"])
+                    .args(["--interval-ms", "0"])
+                    .arg("--shared")
+                    .arg(&shared)
+                    .arg("--snapshot")
+                    .arg(dir.join(format!("{name}.toml")))
+                    .spawn()
+                    .expect("spawn the node binary")
+            })
+            .collect();
+        for mut child in children {
+            let status = child.wait().expect("wait for the node");
+            assert!(status.success(), "a node exits cleanly: {status}");
+        }
+
+        let processed = ledger(&contended);
+        assert!(list(&contended, "item_").is_empty(), "every item was taken");
+        assert!(!duplicated(&processed), "no item has two holders");
+        assert_eq!(
+            holders(&processed).len(),
+            1_000,
+            "every item has one holder"
+        );
+        let owners: BTreeSet<&str> = processed
+            .iter()
+            .filter_map(|record| record.holder.split_once('-'))
+            .map(|(process, _)| process)
+            .collect();
+        assert_eq!(owners.len(), 2, "both processes took items from the lane");
+
+        for name in ["left", "right"] {
+            let text = std::fs::read_to_string(dir.join(format!("{name}.toml"))).expect("snapshot");
+            let snapshot = from_toml(&text).expect("a node's snapshot parses");
+            let scope = format!("xmip:///playground/node/{name}/claim/file");
+            for record in snapshot.health(&scope) {
+                assert_eq!(
+                    record.health,
+                    Health::Fine,
+                    "{}: {}",
+                    record.scope,
+                    record.evidence
+                );
+            }
         }
         std::fs::remove_dir_all(&dir).ok();
     }

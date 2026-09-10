@@ -190,4 +190,24 @@ mod tests {
         assert_eq!(returned(&KafkaRoundTrip, &long), long);
         assert_eq!(returned(&KafkaRoundTrip, b""), b"");
     }
+
+    #[test]
+    fn mqtt_carries_the_edges() {
+        crate::support::carries_the_edges(&MqttRoundTrip);
+    }
+
+    #[test]
+    fn nats_carries_the_edges() {
+        crate::support::carries_the_edges(&NatsRoundTrip);
+    }
+
+    #[test]
+    fn amqp_carries_the_edges() {
+        crate::support::carries_the_edges(&AmqpRoundTrip);
+    }
+
+    #[test]
+    fn kafka_carries_the_edges() {
+        crate::support::carries_the_edges(&KafkaRoundTrip);
+    }
 }
