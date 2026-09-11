@@ -1,4 +1,4 @@
-//! One shape the pingpong test drives, and an adapter per transport.
+//! One shape the pingpong test drives, and the transport's own far end behind it.
 //!
 //! The transports do not share a round-trip shape: file sends into a directory
 //! and reads it back from the same place; tcp, http and smtp bind a listener,
@@ -7,17 +7,21 @@
 //! which fits file and not a listen/accept socket.
 //!
 //! So the scenario drives this smaller thing instead: [`RoundTrip::exchange`]
-//! — hand it a payload, get back what returned, or why it could not. Each
-//! transport gets an adapter that does its own dance behind that one method,
-//! and the scenario stays one thing over all of them. Keeping every protocol
-//! in mind is exactly this: a new transport is a new adapter, not a new
-//! scenario.
+//! — hand it a payload, get back what returned, or why it could not. Until
+//! 2026-09-11 each transport got an adapter here that did its own dance
+//! behind that one method, forty-two of them. The dance belongs with the
+//! protocol (ADR-0051): a technology implements [`Loopback`] in its own crate
+//! — the far end, the near end, the ceiling, the refusals — and [`Looped`]
+//! is the one adapter over all of them. A new transport is a `loopback()`
+//! constructor in its crate and one line in [`all_transports`]. The adapters
+//! still written here are the ones not yet moved.
 
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use transport::Transport;
+use transport::{LOOPBACK_TIMEOUT, Loopback};
 use transport_file::FileTransport;
+use transport_http::HttpTransport;
 use transport_tcp::TcpTransport;
 use transport_udp::UdpTransport;
 
@@ -33,10 +37,9 @@ pub enum Exchange {
 }
 
 /// How long any adapter waits on its far end before the round is judged
-/// rather than waited on: a lost datagram, a peer that never connects, a
-/// broker gone quiet. Two seconds is long enough for loopback and short
-/// enough that a matrix of hundreds of pairs stays a test.
-pub const TIMEOUT: Duration = Duration::from_secs(2);
+/// rather than waited on. The capability's number, so a technology's far end
+/// and the playground agree.
+pub const TIMEOUT: Duration = LOOPBACK_TIMEOUT;
 
 /// A transport the pingpong scenario can drive, behind one method. `Send`
 /// and `Sync` so a schedule can drive pairs from several threads at once —
@@ -72,17 +75,42 @@ pub trait RoundTrip: Send + Sync {
     fn exchange(&self, payload: &[u8]) -> Exchange;
 }
 
+/// The one adapter over every transport that is its own far end: the
+/// protocol's [`Loopback`] does the dance, this reports the outcome.
+pub struct Looped<L: Loopback>(pub L);
+
+impl<L: Loopback> RoundTrip for Looped<L> {
+    fn transport(&self) -> &'static str {
+        self.0.name()
+    }
+
+    fn ceiling(&self) -> Option<usize> {
+        self.0.ceiling()
+    }
+
+    fn refuses(&self, payload: &[u8]) -> Option<String> {
+        self.0.refuses(payload)
+    }
+
+    fn exchange(&self, payload: &[u8]) -> Exchange {
+        match self.0.round(payload) {
+            Ok(arrived) => Exchange::Returned(arrived.bytes),
+            Err(error) => Exchange::Failed(error.message),
+        }
+    }
+}
+
 /// Every implemented transport, each behind its adapter — the one list the
 /// scenarios share, so a new transport is wired in a single place rather than in
 /// each scenario. `file_dir` is where the file transport ping-pongs.
 #[must_use]
 pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn RoundTrip>> {
     vec![
-        Box::new(FileRoundTrip::new(file_dir)),
-        Box::new(TcpRoundTrip),
-        Box::new(crate::reply::HttpRoundTrip),
+        Box::new(Looped(FileTransport::loopback(file_dir))),
+        Box::new(Looped(TcpTransport::loopback())),
+        Box::new(Looped(HttpTransport::loopback())),
         Box::new(crate::reply::SmtpRoundTrip),
-        Box::new(UdpRoundTrip),
+        Box::new(Looped(UdpTransport::loopback())),
         Box::new(crate::reply::WebSocketRoundTrip),
         Box::new(crate::reply::MllpRoundTrip),
         Box::new(crate::industrial::ModbusRoundTrip),
@@ -121,14 +149,16 @@ pub fn all_transports(file_dir: impl Into<std::path::PathBuf>) -> Vec<Box<dyn Ro
     ]
 }
 
-/// The listen-and-accept shape tcp, http, smtp, websocket and mllp share, with
-/// the one rule that keeps a round from hanging the schedule: the accept runs
-/// on its own thread and the send on this one, and when the send fails before
-/// it connected — an ephemeral port exhausted, a refused connect under load —
-/// the listener is poked with a throwaway connect so the accept returns and is
-/// judged rather than waited on forever. Found 2026-09-08 when the matrix grew
-/// to twelve contracts over seven transports and one round out of thousands
-/// blocked a whole `cargo test` in `accept`.
+/// The listen-and-accept shape the adapters not yet moved into their crates
+/// still use, with the one rule that keeps a round from hanging the schedule:
+/// the accept runs on its own thread and the send on this one, and when the
+/// send fails before it connected — an ephemeral port exhausted, a refused
+/// connect under load — the listener is poked with a throwaway connect so the
+/// accept returns and is judged rather than waited on forever. Found
+/// 2026-09-08 when the matrix grew to twelve contracts over seven transports
+/// and one round out of thousands blocked a whole `cargo test` in `accept`.
+/// `Loopback::round` in the capability is this same rule; this goes when the
+/// last adapter moves.
 pub(crate) fn listen_exchange<A, S>(
     listener: TcpListener,
     address: &str,
@@ -152,52 +182,29 @@ where
     }
 }
 
-/// File: send into a directory, read it back from the same directory. The
-/// self-contained case, and the reason file was first.
-pub struct FileRoundTrip {
-    dir: std::path::PathBuf,
-}
+/// File over a directory: the file technology's own loopback, named here
+/// because the scenarios' tests build it by directory.
+pub struct FileRoundTrip(Looped<FileTransport>);
 
 impl FileRoundTrip {
     #[must_use]
     pub fn new(dir: impl Into<std::path::PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self(Looped(FileTransport::loopback(dir)))
     }
 }
 
 impl RoundTrip for FileRoundTrip {
     fn transport(&self) -> &'static str {
-        "file"
+        self.0.transport()
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        // One directory per thread: pairs driven at once from several
-        // threads would otherwise pick up each other's file and report it as
-        // "sent, but it did not come back" (found at Harsh, 2026-09-10). Per
-        // thread rather than per exchange so the directory is made once and
-        // the round stays as fast as the file transport is.
-        let dir = self.dir.join(format!("t{:?}", std::thread::current().id()));
-        if let Err(error) = std::fs::create_dir_all(&dir) {
-            return Exchange::Failed(format!("creating the exchange directory: {error}"));
-        }
-        let transport = FileTransport::new(&dir);
-
-        if let Err(error) = transport.send("pingpong", payload) {
-            return Exchange::Failed(format!("send failed: {error}"));
-        }
-
-        match transport.receive() {
-            Ok(arrived) => match arrived.into_iter().find(|a| a.bytes == payload) {
-                Some(a) => Exchange::Returned(a.bytes),
-                None => Exchange::Failed("sent, but it did not come back".to_string()),
-            },
-            Err(error) => Exchange::Failed(format!("receive failed: {error}")),
-        }
+        self.0.exchange(payload)
     }
 }
 
-/// TCP: bind a listener, connect and send from another thread, accept the one
-/// connection and read it. The listen/accept shape http and smtp also take.
+/// TCP: the tcp technology's own loopback, named here for the tests that
+/// drive it by name.
 pub struct TcpRoundTrip;
 
 impl RoundTrip for TcpRoundTrip {
@@ -206,32 +213,12 @@ impl RoundTrip for TcpRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        // Bind on an ephemeral port; the OS hands back the real address.
-        let far_end = TcpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
-
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| far_end.accept_one(listener),
-            |address| TcpTransport::new("127.0.0.1:0").send(address, payload),
-        )
+        Looped(TcpTransport::loopback()).exchange(payload)
     }
 }
 
-/// The most one IPv4 datagram carries: 65 535 less the twenty bytes of the
-/// IP header and the eight of the UDP header (RFC 791, RFC 768).
-const UDP_DATAGRAM: usize = 65_507;
-
-/// UDP: bind the receiving socket first (a datagram fired before the receiver
-/// is bound is dropped silently), learn its address, fire one datagram from
-/// another thread, receive it. A read timeout keeps a lost datagram from
-/// hanging the round — UDP has no delivery guarantee. A payload over
-/// [`UDP_DATAGRAM`] is refused before anything waits on it.
+/// UDP: the udp technology's own loopback, with the datagram ceiling it
+/// declares.
 pub struct UdpRoundTrip;
 
 impl RoundTrip for UdpRoundTrip {
@@ -240,43 +227,14 @@ impl RoundTrip for UdpRoundTrip {
     }
 
     fn ceiling(&self) -> Option<usize> {
-        Some(UDP_DATAGRAM)
+        UdpTransport::loopback().ceiling()
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        if payload.len() > UDP_DATAGRAM {
-            return Exchange::Failed(format!(
-                "{} bytes is over the {UDP_DATAGRAM} one datagram carries",
-                payload.len()
-            ));
-        }
-        let far_end = UdpTransport::new("127.0.0.1:0").timing_out_after(TIMEOUT);
-
-        // Bind before the sender fires, or the datagram is gone.
-        let (socket, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        // UDP cannot hang: the receive has a timeout, and a datagram that never
-        // arrives is a timeout, which is what UDP is.
-        let payload = payload.to_vec();
-        let sender =
-            std::thread::spawn(move || UdpTransport::new("127.0.0.1:0").send(&address, &payload));
-
-        let caught = far_end.receive_one(&socket);
-
-        match (caught, sender.join()) {
-            (Ok(arrived), Ok(Ok(()))) => Exchange::Returned(arrived.bytes),
-            (Err(error), _) => Exchange::Failed(format!("receive failed: {error}")),
-            (_, Ok(Err(error))) => Exchange::Failed(format!("send failed: {error}")),
-            (_, Err(_)) => Exchange::Failed("the sending thread panicked".to_string()),
-        }
+        Looped(UdpTransport::loopback()).exchange(payload)
     }
 }
 
-/// The verdict every listen/accept transport reaches the same way: the payload
-/// came back iff both the receive and the send half succeeded.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +285,15 @@ mod tests {
     }
 
     #[test]
+    fn a_looped_transport_reports_its_own_name_and_ceiling() {
+        let looped = Looped(UdpTransport::loopback());
+        assert_eq!(looped.transport(), "udp");
+        assert_eq!(looped.ceiling(), Some(transport_udp::MAX_DATAGRAM));
+        assert_eq!(Looped(HttpTransport::loopback()).transport(), "http");
+        assert!(Looped(TcpTransport::loopback()).ceiling().is_none());
+    }
+
+    #[test]
     fn file_carries_the_edges() {
         let dir = scratch("file-edges");
         crate::support::carries_the_edges(&FileRoundTrip::new(&dir));
@@ -341,9 +308,10 @@ mod tests {
     #[test]
     fn udp_carries_the_edges() {
         crate::support::carries_the_edges(&UdpRoundTrip);
-        let brim = crate::stress::patterned(UDP_DATAGRAM);
+        let ceiling = transport_udp::MAX_DATAGRAM;
+        let brim = crate::stress::patterned(ceiling);
         assert!(matches!(UdpRoundTrip.exchange(&brim), Exchange::Returned(back) if back == brim));
-        let over = vec![0u8; UDP_DATAGRAM + 1];
+        let over = vec![0u8; ceiling + 1];
         assert!(matches!(UdpRoundTrip.exchange(&over), Exchange::Failed(_)));
     }
 

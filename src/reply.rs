@@ -15,7 +15,7 @@ use transport_mllp::MllpTransport;
 use transport_smtp::SmtpTransport;
 use transport_websocket::WebSocketTransport;
 
-use crate::roundtrip::{Exchange, RoundTrip, TIMEOUT, listen_exchange};
+use crate::roundtrip::{Exchange, Looped, RoundTrip, TIMEOUT, listen_exchange};
 
 /// MLLP: bind a listener, send one framed message from another thread, accept
 /// it, acknowledge on the same connection, and read the message back. The tcp
@@ -49,10 +49,9 @@ impl RoundTrip for MllpRoundTrip {
     }
 }
 
-/// HTTP: bind a listener, send the payload as a request body from another
-/// thread, accept the one request and read the body back. The tcp shape with
-/// HTTP framing on top — the server writes a response, so the sender's `send`
-/// completes rather than blocking on a reply.
+/// HTTP: the http technology's own loopback — bind a listener, send the
+/// payload as a request body, accept the one request and read the body back
+/// — named here for the tests that drive it by name.
 pub struct HttpRoundTrip;
 
 impl HttpRoundTrip {
@@ -74,22 +73,7 @@ impl RoundTrip for HttpRoundTrip {
     }
 
     fn exchange(&self, payload: &[u8]) -> Exchange {
-        let far_end = HttpTransport::new("127.0.0.1:0");
-
-        let (listener, address) = match far_end.bind() {
-            Ok(bound) => bound,
-            Err(error) => return Exchange::Failed(format!("bind failed: {error}")),
-        };
-
-        listen_exchange(
-            listener,
-            &address,
-            move |listener| far_end.accept_one(listener),
-            |address| {
-                HttpTransport::new("127.0.0.1:0")
-                    .send(&format!("http://{address}/pingpong"), payload)
-            },
-        )
+        Looped(HttpTransport::loopback()).exchange(payload)
     }
 }
 
