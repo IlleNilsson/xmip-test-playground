@@ -17,11 +17,11 @@
 //!
 //! Xmip's own transports are the far end, so nothing external is stood up and
 //! the Playground runs on a laptop with no network. Every implemented transport
-//! ping-pongs today — file over a directory, tcp/http/smtp/websocket over a
-//! loopback connection, udp over a loopback datagram — each behind one
+//! ping-pongs today, each as its own far end — the capability's `Loopback`,
+//! written in the technology's crate (ADR-0051) — behind the one
 //! [`RoundTrip`] adapter, so the scenario is one thing over all of them. A
-//! transport declared but not yet implemented is a new adapter away, not a new
-//! test.
+//! transport declared but not yet implemented is a `loopback()` away, not a
+//! new test.
 //!
 //! It runs more than one scenario over those adapters, each a different question
 //! asked of the same estate, published under its own subtree of
@@ -47,40 +47,29 @@
 //! What it can do grows with the runtime and the transports. Created
 //! 2026-09-05; named by the owner.
 
-pub mod broker;
 pub mod budget;
 pub mod cabinet;
 pub mod claim;
-pub mod collect;
 pub mod contracts;
 pub mod daily;
 pub mod database;
-pub mod discovery;
-pub mod factory;
 pub mod fault;
 pub mod filing;
 pub mod fleet;
 pub mod furious;
 pub mod identity;
-pub mod industrial;
 pub mod load;
-pub mod management;
-pub mod messaging;
 pub mod pingpong;
-pub mod record;
 pub mod remote;
-pub mod reply;
 pub mod report;
 pub mod roundtrip;
 pub mod schedule;
 pub mod secretary;
 pub mod standing;
-pub mod storage;
 pub mod storm;
 pub mod stress;
 mod support;
 pub mod switch;
-pub mod telemetry;
 pub mod verdict;
 
 pub use budget::Budget;
@@ -94,7 +83,6 @@ pub use furious::Furious;
 pub use identity::{IdentityFaults, Step};
 pub use load::Load;
 pub use pingpong::ping_pong;
-pub use reply::{HttpRoundTrip, SmtpRoundTrip, WebSocketRoundTrip};
 pub use report::{activity_toml, history_toml, to_toml, write_atomic};
 pub use roundtrip::{Exchange, FileRoundTrip, RoundTrip, TcpRoundTrip, UdpRoundTrip};
 pub use schedule::{CONTRACTS, Schedule};

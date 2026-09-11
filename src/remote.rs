@@ -8,7 +8,7 @@
 //! one store in memory — serves exactly what an archive and a restore need,
 //! and joins it. The session runs on its own thread and the filing on this
 //! one, so a far end that hangs is judged within [`TIMEOUT`] rather than
-//! waited on: the same rule `listen_exchange` keeps for the transports.
+//! waited on: the same rule `Loopback::round` keeps for the transports.
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};

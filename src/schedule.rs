@@ -499,12 +499,32 @@ mod tests {
     }
 
     #[test]
-    fn a_fault_free_schedule_rolls_up_to_green() {
+    fn a_fault_free_schedule_has_no_red_and_says_why_it_is_not_all_green() {
         let dir = scratch("rollup");
         let mut schedule = Schedule::new("xmip:///playground", &dir);
 
         let snapshot = schedule.tick();
-        assert_eq!(snapshot.worst("xmip:///playground"), Some(Health::Fine));
+        // Nothing is broken. What is not green is a transport that declares
+        // it cannot carry a probe as it is — a queue that takes UTF-8 text,
+        // an OS object this machine lacks — judged one-sided, yellow, with
+        // the reason (ADR-0028 clause 5, ADR-0051).
+        let red: Vec<_> = snapshot
+            .health("xmip:///playground")
+            .into_iter()
+            .filter(|record| record.health == Health::Done)
+            .map(|record| format!("{}: {}", record.scope, record.evidence))
+            .collect();
+        assert!(
+            red.is_empty(),
+            "no pair fails without a fault:
+{}",
+            red.join(
+                "
+"
+            )
+        );
+        // A yellow leaf rolls up as Holding (ADR-0041); red never appears.
+        assert_ne!(snapshot.worst("xmip:///playground"), Some(Health::Done));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -544,21 +564,28 @@ mod tests {
 
         let snapshot = schedule.tick();
         let transports = all_transports(&dir).len();
-        let pairs = (CONTRACTS.len() * transports) as u64;
+        // A pair judged one-sided at Receive moved no Stream: the transport
+        // declared it could not carry the probe, so nothing went in.
+        let one_sided = snapshot
+            .health("xmip:///playground/receive")
+            .iter()
+            .filter(|record| record.health == Health::Stressed)
+            .count() as u64;
+        let pairs = (CONTRACTS.len() * transports) as u64 - one_sided;
 
         assert_eq!(
             snapshot
                 .measure("xmip:///playground", Counted::Streams)
                 .map(|c| c.value),
             Some(pairs),
-            "one Stream in per pair"
+            "one Stream in per delivered pair"
         );
         assert_eq!(
             snapshot
                 .measure("xmip:///playground", Counted::Journeys)
                 .map(|c| c.value),
             Some(pairs),
-            "one Journey per pair"
+            "one Journey per delivered pair"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

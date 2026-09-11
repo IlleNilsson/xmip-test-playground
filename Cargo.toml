@@ -72,6 +72,47 @@ transport_azure_blob = { package = "xmip-core-transport-azure-blob", git = "http
 transport_google_cloud_storage = { package = "xmip-core-transport-google-cloud-storage", git = "https://github.com/IlleNilsson/xmip-core-transport-google-cloud-storage", branch = "main" }
 transport_mssql = { package = "xmip-core-transport-mssql", git = "https://github.com/IlleNilsson/xmip-core-transport-mssql", branch = "main" }
 transport_mysql = { package = "xmip-core-transport-mysql", git = "https://github.com/IlleNilsson/xmip-core-transport-mysql", branch = "main" }
+# The built that gained their loopback on 2026-09-11 (ADR-0051).
+transport_azure_service_bus = { package = "xmip-core-transport-azure-service-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-azure-service-bus", branch = "main" }
+transport_azure_event_hubs = { package = "xmip-core-transport-azure-event-hubs", git = "https://github.com/IlleNilsson/xmip-core-transport-azure-event-hubs", branch = "main" }
+transport_azure_event_grid = { package = "xmip-core-transport-azure-event-grid", git = "https://github.com/IlleNilsson/xmip-core-transport-azure-event-grid", branch = "main" }
+transport_google_pub_sub = { package = "xmip-core-transport-google-pub-sub", git = "https://github.com/IlleNilsson/xmip-core-transport-google-pub-sub", branch = "main" }
+transport_j1939 = { package = "xmip-core-transport-j1939", git = "https://github.com/IlleNilsson/xmip-core-transport-j1939", branch = "main" }
+transport_obd_ii = { package = "xmip-core-transport-obd-ii", git = "https://github.com/IlleNilsson/xmip-core-transport-obd-ii", branch = "main" }
+transport_uds = { package = "xmip-core-transport-uds", git = "https://github.com/IlleNilsson/xmip-core-transport-uds", branch = "main" }
+transport_m_bus = { package = "xmip-core-transport-m-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-m-bus", branch = "main" }
+transport_wireless_m_bus = { package = "xmip-core-transport-wireless-m-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-wireless-m-bus", branch = "main" }
+transport_bluetooth = { package = "xmip-core-transport-bluetooth", git = "https://github.com/IlleNilsson/xmip-core-transport-bluetooth", branch = "main" }
+transport_lorawan = { package = "xmip-core-transport-lorawan", git = "https://github.com/IlleNilsson/xmip-core-transport-lorawan", branch = "main" }
+transport_zigbee = { package = "xmip-core-transport-zigbee", git = "https://github.com/IlleNilsson/xmip-core-transport-zigbee", branch = "main" }
+transport_thread = { package = "xmip-core-transport-thread", git = "https://github.com/IlleNilsson/xmip-core-transport-thread", branch = "main" }
+transport_knx = { package = "xmip-core-transport-knx", git = "https://github.com/IlleNilsson/xmip-core-transport-knx", branch = "main" }
+transport_wireless_hart = { package = "xmip-core-transport-wireless-hart", git = "https://github.com/IlleNilsson/xmip-core-transport-wireless-hart", branch = "main" }
+transport_dds = { package = "xmip-core-transport-dds", git = "https://github.com/IlleNilsson/xmip-core-transport-dds", branch = "main" }
+transport_ethernet = { package = "xmip-core-transport-ethernet", git = "https://github.com/IlleNilsson/xmip-core-transport-ethernet", branch = "main" }
+transport_canopen = { package = "xmip-core-transport-canopen", git = "https://github.com/IlleNilsson/xmip-core-transport-canopen", branch = "main" }
+transport_ethercat = { package = "xmip-core-transport-ethercat", git = "https://github.com/IlleNilsson/xmip-core-transport-ethercat", branch = "main" }
+transport_ethernet_ip = { package = "xmip-core-transport-ethernet-ip", git = "https://github.com/IlleNilsson/xmip-core-transport-ethernet-ip", branch = "main" }
+transport_profinet = { package = "xmip-core-transport-profinet", git = "https://github.com/IlleNilsson/xmip-core-transport-profinet", branch = "main" }
+transport_io_link = { package = "xmip-core-transport-io-link", git = "https://github.com/IlleNilsson/xmip-core-transport-io-link", branch = "main" }
+transport_iec_61850 = { package = "xmip-core-transport-iec-61850", git = "https://github.com/IlleNilsson/xmip-core-transport-iec-61850", branch = "main" }
+transport_nfs = { package = "xmip-core-transport-nfs", git = "https://github.com/IlleNilsson/xmip-core-transport-nfs", branch = "main" }
+transport_smb = { package = "xmip-core-transport-smb", git = "https://github.com/IlleNilsson/xmip-core-transport-smb", branch = "main" }
+transport_oracle = { package = "xmip-core-transport-oracle", git = "https://github.com/IlleNilsson/xmip-core-transport-oracle", branch = "main" }
+transport_opc_ua = { package = "xmip-core-transport-opc-ua", git = "https://github.com/IlleNilsson/xmip-core-transport-opc-ua", branch = "main" }
+transport_as2 = { package = "xmip-core-transport-as2", git = "https://github.com/IlleNilsson/xmip-core-transport-as2", branch = "main" }
+transport_aws_sqs = { package = "xmip-core-transport-aws-sqs", git = "https://github.com/IlleNilsson/xmip-core-transport-aws-sqs", branch = "main" }
+transport_hart = { package = "xmip-core-transport-hart", git = "https://github.com/IlleNilsson/xmip-core-transport-hart", branch = "main" }
+transport_sqlite = { package = "xmip-core-transport-sqlite", git = "https://github.com/IlleNilsson/xmip-core-transport-sqlite", branch = "main" }
+transport_as4 = { package = "xmip-core-transport-as4", git = "https://github.com/IlleNilsson/xmip-core-transport-as4", branch = "main" }
+transport_aws_kinesis = { package = "xmip-core-transport-aws-kinesis", git = "https://github.com/IlleNilsson/xmip-core-transport-aws-kinesis", branch = "main" }
+transport_aws_sns = { package = "xmip-core-transport-aws-sns", git = "https://github.com/IlleNilsson/xmip-core-transport-aws-sns", branch = "main" }
+transport_dicom = { package = "xmip-core-transport-dicom", git = "https://github.com/IlleNilsson/xmip-core-transport-dicom", branch = "main" }
+transport_ibm_mq = { package = "xmip-core-transport-ibm-mq", git = "https://github.com/IlleNilsson/xmip-core-transport-ibm-mq", branch = "main" }
+transport_iso_tp = { package = "xmip-core-transport-iso-tp", git = "https://github.com/IlleNilsson/xmip-core-transport-iso-tp", branch = "main" }
+transport_msmq = { package = "xmip-core-transport-msmq", git = "https://github.com/IlleNilsson/xmip-core-transport-msmq", branch = "main" }
+transport_named_pipe = { package = "xmip-core-transport-named-pipe", git = "https://github.com/IlleNilsson/xmip-core-transport-named-pipe", branch = "main" }
+transport_unix_socket = { package = "xmip-core-transport-unix-socket", git = "https://github.com/IlleNilsson/xmip-core-transport-unix-socket", branch = "main" }
 
 # The content axis: a probe sends an actual Stream, and on arrival a real
 # Contract validates it — a pair is delivered only if it round-tripped and the
