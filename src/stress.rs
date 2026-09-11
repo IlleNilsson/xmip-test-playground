@@ -14,6 +14,7 @@
 //! ran at before the axis existed; it is the default so nothing changed
 //! quietly.
 
+use crate::headroom::Headroom;
 use crate::verdict::Contract;
 
 /// How hard.
@@ -78,13 +79,15 @@ impl Stress {
         }
     }
 
-    /// How many pairs a schedule runs at once.
+    /// How many pairs a schedule runs at once. `brutal` drove every core
+    /// until 2026-09-11 and drives the cores within the [`Headroom`] since:
+    /// half of what was free when the tests started.
     #[must_use]
     pub fn workers(self) -> usize {
         match self {
             Self::Calm | Self::Realistic => 1,
-            Self::Harsh => 4,
-            Self::Brutal => std::thread::available_parallelism().map_or(8, usize::from),
+            Self::Harsh => 4.min(Headroom::current().cores()),
+            Self::Brutal => Headroom::current().cores(),
         }
     }
 
@@ -99,14 +102,16 @@ impl Stress {
         }
     }
 
-    /// How many node processes a fleet spawns.
+    /// How many node processes a fleet spawns. Ten and forty were the whole
+    /// machine's worth; since 2026-09-11 they are scaled to the [`Headroom`]
+    /// by the same rule as [`Self::workers`].
     #[must_use]
-    pub const fn nodes(self) -> usize {
+    pub fn nodes(self) -> usize {
         match self {
             Self::Calm => 1,
             Self::Realistic => 3,
-            Self::Harsh => 10,
-            Self::Brutal => 40,
+            Self::Harsh => Headroom::current().share(10),
+            Self::Brutal => Headroom::current().share(40),
         }
     }
 
@@ -147,6 +152,8 @@ impl Stress {
 /// ten, so a pair is never red every round and the board still moves.
 pub const MAX_RATE: u8 = 90;
 
+/// Half the cores the machine has, never fewer than one: what `brutal`
+/// drives pairs from since 2026-09-11, having driven every core before. The
 /// A rate under a level: multiplied and capped.
 #[must_use]
 pub fn scaled_rate(rate: u8, stress: Stress) -> u8 {
@@ -210,8 +217,17 @@ mod tests {
         assert_eq!(Stress::parse("HARSH"), Some(Stress::Harsh));
         assert_eq!(Stress::parse("nope"), None);
         assert_eq!(Stress::Brutal.name(), "brutal");
-        assert_eq!(Stress::Harsh.nodes(), 10);
-        assert_eq!(Stress::Brutal.nodes(), 40);
+        assert!((1..=10).contains(&Stress::Harsh.nodes()));
+        assert!((1..=40).contains(&Stress::Brutal.nodes()));
+    }
+
+    #[test]
+    fn the_levels_stay_within_the_headroom() {
+        let headroom = Headroom::current();
+        assert_eq!(Stress::Brutal.workers(), headroom.cores());
+        assert!(Stress::Harsh.workers() <= 4);
+        assert_eq!(Stress::Brutal.nodes(), headroom.share(40));
+        assert_eq!(Stress::Harsh.nodes(), headroom.share(10));
     }
 
     #[test]

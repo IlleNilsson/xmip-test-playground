@@ -376,7 +376,8 @@ mod tests {
         let dir = scratch("storm-budget");
         let storm = Storm::new(NODE, &dir).at(Stress::Harsh).over(sample(&dir));
         let pairs = u32::try_from(3 * CONTRACTS.len()).expect("small");
-        assert_eq!(storm.budget(), TIMEOUT * 3 * pairs / 4);
+        let workers = u32::try_from(Stress::Harsh.workers()).expect("small");
+        assert_eq!(storm.budget(), TIMEOUT * 3 * pairs / workers);
     }
 
     /// An adapter that panics on every exchange: the fourth invariant's

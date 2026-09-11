@@ -126,9 +126,22 @@ impl Fleet {
     }
 
     fn start(&self, name: &str, path: &Path) -> io::Result<Child> {
+        /// How often a node ticks. A quarter second where a test wants
+        /// contention now; two seconds in a brutal roll, where forty nodes
+        /// ticking four times a second burned five cores between them
+        /// (2026-09-11) and the budget is half of what is free.
+        fn node_interval_ms(stress: Stress) -> u64 {
+            match stress {
+                Stress::Calm | Stress::Realistic => 250,
+                Stress::Harsh => 1_000,
+                Stress::Brutal => 2_000,
+            }
+        }
+
         Command::new(&self.binary)
             .args(["--name", name, "--stress", self.stress.name()])
             .args(["--rounds", &self.rounds.to_string()])
+            .args(["--interval-ms", &node_interval_ms(self.stress).to_string()])
             .args(Switches::from_env().flags())
             .arg("--shared")
             .arg(&self.shared)

@@ -417,7 +417,11 @@ mod tests {
         let mut schedule = Schedule::new(NODE, &dir)
             .at(Stress::Harsh)
             .over(sample(&dir));
-        assert_eq!(schedule.shape(), (3 * CONTRACTS.len(), 4));
+        // Four workers at harsh, or fewer within the headroom (ADR-0028, 2026-09-11).
+        assert_eq!(
+            schedule.shape(),
+            (3 * CONTRACTS.len(), Stress::Harsh.workers())
+        );
 
         let snapshot = stress_rounds(&mut schedule, Stress::Harsh.rounds());
 

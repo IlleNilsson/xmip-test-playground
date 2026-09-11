@@ -69,6 +69,11 @@ pub struct Load {
     round: u64,
     standings: BTreeMap<String, Standing>,
     moved_bytes: u64,
+    /// How many pairs one round carries, when bounded; the rest wait their
+    /// turn. `None` carries every pair every round, as a test wants.
+    per_round: Option<usize>,
+    /// Where the next round starts in the matrix.
+    cursor: usize,
 }
 
 impl Load {
@@ -85,7 +90,19 @@ impl Load {
             round: 0,
             standings: BTreeMap::new(),
             moved_bytes: 0,
+            per_round: None,
+            cursor: 0,
         }
+    }
+
+    /// Carry at most `pairs` pairs a round, the matrix rotating under it, so
+    /// a round finishes while an operator watches: a mebibyte over each of
+    /// sixteen hundred pairs is a roll's afternoon, not a round (2026-09-11).
+    /// Every pair's standing stays on the board between its turns.
+    #[must_use]
+    pub fn pairs_per_round(mut self, pairs: usize) -> Self {
+        self.per_round = Some(pairs.max(1));
+        self
     }
 
     /// The same exercise, dropping the occasional transfer mid-flight:
@@ -143,32 +160,42 @@ impl Load {
         self
     }
 
-    /// Run every pair once with a large payload and return the snapshot.
+    /// Run this round's pairs — every one, or the bounded slice — with a
+    /// large payload and return the snapshot, every pair's standing on it.
     pub fn tick(&mut self) -> Snapshot {
         self.round += 1;
         let now = now_unix_nanos();
         let mut snapshot = Snapshot::new();
 
-        for transport in &self.transports {
+        let matrix = self.transports.len() * CONTRACTS.len();
+        let carried = self.per_round.map_or(matrix, |pairs| pairs.min(matrix));
+        for step in 0..carried {
+            let at = (self.cursor + step) % matrix.max(1);
+            let transport = &self.transports[at / CONTRACTS.len()];
+            let contract = CONTRACTS[at % CONTRACTS.len()];
             let name = transport.transport();
-            for &contract in &CONTRACTS {
-                let scope = format!("{}/{}/{}", self.node, name, contract.name());
-                let line = self.carry(transport.as_ref(), contract);
+            let scope = format!("{}/{}/{}", self.node, name, contract.name());
+            let line = self.carry(transport.as_ref(), contract);
 
-                let mark = if line.delivered {
-                    Mark::Pass
-                } else if line.one_sided {
-                    Mark::Warn
-                } else {
-                    Mark::Fail
-                };
-                if line.delivered {
-                    self.moved_bytes += line.bytes;
-                }
-                let standing = self.standings.entry(scope.clone()).or_default();
-                standing.record(mark, line.evidence);
-                snapshot.record_health(standing.health(&scope, now));
+            let mark = if line.delivered {
+                Mark::Pass
+            } else if line.one_sided {
+                Mark::Warn
+            } else {
+                Mark::Fail
+            };
+            if line.delivered {
+                self.moved_bytes += line.bytes;
             }
+            self.standings
+                .entry(scope)
+                .or_default()
+                .record(mark, line.evidence);
+        }
+        self.cursor = (self.cursor + carried) % matrix.max(1);
+
+        for (scope, standing) in &self.standings {
+            snapshot.record_health(standing.health(scope, now));
         }
 
         snapshot.record_count(Count {

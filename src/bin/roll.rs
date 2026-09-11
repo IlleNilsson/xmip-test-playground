@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use observe::{Health, History, Snapshot};
+use xmip_test_playground::Headroom;
 use xmip_test_playground::fleet::{Fleet, merge, node_binary};
 use xmip_test_playground::{
     Budget, Claim, Daily, FaultPlan, Filing, Furious, Load, Schedule, Secretary, Stress,
@@ -68,7 +69,8 @@ fn main() {
         Furious::new(format!("{root}/furious"), base.join("furious")).under_pressure();
     let mut load = Load::new(format!("{root}/load"), base.join("load"))
         .under_pressure()
-        .with_bytes(load_bytes());
+        .with_bytes(load_bytes())
+        .pairs_per_round(stress.workers() * 8);
     let mut secretary = Secretary::new(format!("{root}/secretary")).under_pressure();
     let mut filing = Filing::new(format!("{root}/filing"), base.join("filing")).under_pressure();
     let mut claim = Claim::new(format!("{root}/claim"), base.join("claim")).under_pressure();
@@ -93,6 +95,11 @@ fn main() {
     let mut round: u64 = 0;
     loop {
         round += 1;
+
+        // What everyone else is using, measured now: the levels size this
+        // round's pairs to half of what is left (ADR-0028, 2026-09-11). The
+        // fleet was sized the same way when it was spawned.
+        let headroom = Headroom::refresh();
 
         let mut snapshot = Snapshot::new();
         merge(&mut snapshot, &pingpong.tick());
@@ -122,6 +129,7 @@ fn main() {
         } else {
             summarise(root, round, &snapshot);
         }
+        println!("  headroom: {}", headroom.describe());
 
         if limit.is_some_and(|limit| round >= limit) || budget.expired() {
             break;
