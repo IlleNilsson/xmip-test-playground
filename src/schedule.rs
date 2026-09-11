@@ -34,6 +34,7 @@ use crate::verdict::{Contract, Outcome, Stage, Verdict};
 pub use tally::Tally;
 use tally::over_time;
 pub(crate) use workers::drive_pairs;
+use workers::{all_pairs, drive_selected, slice};
 
 /// Every contract the playground exercises today: the three local shapes and
 /// every contract technology the estate has landed. ADR-0028's matrix is every
@@ -81,6 +82,12 @@ pub struct Schedule {
     messages: u64,
     journeys: u64,
     moved_bytes: u64,
+    /// How many pairs one round drives, when bounded; the rest wait their
+    /// turn and keep their standing on the board. `None` drives every pair
+    /// every round, as a test wants.
+    per_round: Option<usize>,
+    /// Where the next bounded round starts in the matrix.
+    cursor: usize,
 }
 
 impl Schedule {
@@ -105,6 +112,8 @@ impl Schedule {
             messages: 0,
             journeys: 0,
             moved_bytes: 0,
+            per_round: None,
+            cursor: 0,
         }
     }
 
@@ -199,6 +208,21 @@ impl Schedule {
             }
         }
 
+        // The pairs that waited this round keep their standing on the board.
+        let published: std::collections::BTreeSet<String> = snapshot
+            .health_records()
+            .map(|record| record.scope.clone())
+            .collect();
+        for (scope, tally) in &self.tallies {
+            if !published.contains(scope) {
+                snapshot.record_health(over_time(scope, tally, now));
+            }
+        }
+        if let Some(per_round) = self.per_round {
+            let matrix = (self.transports.len() * CONTRACTS.len()).max(1);
+            self.cursor = (self.cursor + per_round.min(matrix)) % matrix;
+        }
+
         self.record_throughput(&mut snapshot, now);
 
         snapshot
@@ -240,12 +264,23 @@ impl Schedule {
     pub fn run_once(&self, now: i64) -> Vec<Verdict> {
         let size = self.stress.map(|level| level.size_for(self.round));
         let (_, workers) = self.shape();
-        drive_pairs(&self.transports, workers, |transport, contract| {
+        let pairs = slice(&all_pairs(&self.transports), self.cursor, self.per_round);
+        drive_selected(&self.transports, &pairs, workers, |transport, contract| {
             self.judge(transport, contract, size, now)
         })
         .into_iter()
         .flatten()
         .collect()
+    }
+
+    /// Drive at most `pairs` pairs a round, the matrix rotating under it, so
+    /// a round lands while an operator watches and the counters move every
+    /// few seconds rather than once a minute (2026-09-11). Every pair keeps
+    /// its standing on the board between its turns.
+    #[must_use]
+    pub fn pairs_per_round(mut self, pairs: usize) -> Self {
+        self.per_round = Some(pairs.max(1));
+        self
     }
 
     /// One pair's verdicts this round: the real exchange — the probe, or the

@@ -63,10 +63,15 @@ fn main() {
     // Each scenario under its own subtree, each with faults or pressure on, so
     // the board is realistic rather than uniformly green. `file` stays clean in
     // every one.
+    // Bounded rounds: a slice of the matrix per round, rotating, so a round
+    // lands in seconds and the counters an operator watches keep moving.
+    let slice = stress.workers() * 16;
     let mut pingpong = Schedule::new(format!("{root}/pingpong"), base.join("pingpong"))
-        .with_faults(FaultPlan::realistic());
-    let mut furious =
-        Furious::new(format!("{root}/furious"), base.join("furious")).under_pressure();
+        .with_faults(FaultPlan::realistic())
+        .pairs_per_round(slice);
+    let mut furious = Furious::new(format!("{root}/furious"), base.join("furious"))
+        .under_pressure()
+        .pairs_per_round(slice);
     let mut load = Load::new(format!("{root}/load"), base.join("load"))
         .under_pressure()
         .with_bytes(load_bytes())

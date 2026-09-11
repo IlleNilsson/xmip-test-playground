@@ -96,6 +96,11 @@ pub struct Furious {
     stress: Option<Stress>,
     round: u64,
     rings: BTreeMap<String, Ring>,
+    /// The transport behind every scope seen, for the budget of a pair that
+    /// waits this round.
+    seen: BTreeMap<String, &'static str>,
+    per_round: Option<usize>,
+    cursor: usize,
 }
 
 impl Furious {
@@ -110,6 +115,9 @@ impl Furious {
             stress: None,
             round: 0,
             rings: BTreeMap::new(),
+            seen: BTreeMap::new(),
+            per_round: None,
+            cursor: 0,
         }
     }
 
@@ -140,15 +148,33 @@ impl Furious {
 
     /// Run every pair once, time it, fold it into the pair's ring, and return the
     /// snapshot to publish.
+    /// Time at most `pairs` pairs a round, the matrix rotating under it, as
+    /// the schedule does; a pair that waits keeps its percentiles and its
+    /// health on the board.
+    #[must_use]
+    pub fn pairs_per_round(mut self, pairs: usize) -> Self {
+        self.per_round = Some(pairs.max(1));
+        self
+    }
+
     pub fn tick(&mut self) -> Snapshot {
         self.round += 1;
         let now = now_unix_nanos();
         let mut snapshot = Snapshot::new();
 
-        for transport in &self.transports {
+        let pairs = crate::schedule::workers::slice(
+            &crate::schedule::workers::all_pairs(&self.transports),
+            self.cursor,
+            self.per_round,
+        );
+        let mut driven = std::collections::BTreeSet::new();
+        for &(at, contract) in &pairs {
+            let transport = &self.transports[at];
             let name = transport.transport();
-            for &contract in &CONTRACTS {
+            {
                 let scope = format!("{}/{}/{}", self.node, name, contract.name());
+                driven.insert(scope.clone());
+                self.seen.insert(scope.clone(), name);
                 let payload = contract.stream().bytes().to_vec();
 
                 let started = Instant::now();
@@ -171,6 +197,15 @@ impl Furious {
                 };
                 snapshot.record_health(record);
             }
+        }
+        for (scope, name) in &self.seen {
+            if !driven.contains(scope) {
+                snapshot.record_health(self.health(scope, name, now));
+            }
+        }
+        if let Some(per_round) = self.per_round {
+            let matrix = (self.transports.len() * CONTRACTS.len()).max(1);
+            self.cursor = (self.cursor + per_round.min(matrix)) % matrix;
         }
 
         snapshot

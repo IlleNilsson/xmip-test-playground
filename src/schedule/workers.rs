@@ -32,9 +32,46 @@ where
     T: Send,
     F: Fn(&dyn RoundTrip, Contract) -> T + Sync,
 {
-    let pairs: Vec<(usize, Contract)> = (0..transports.len())
+    drive_selected(transports, &all_pairs(transports), workers, judge)
+}
+
+/// Every transport by every contract, in matrix order.
+pub(crate) fn all_pairs(transports: &[Box<dyn RoundTrip>]) -> Vec<(usize, Contract)> {
+    (0..transports.len())
         .flat_map(|at| CONTRACTS.iter().map(move |&contract| (at, contract)))
-        .collect();
+        .collect()
+}
+
+/// The pairs a round drives when it is bounded: `count` of them from
+/// `cursor`, wrapping, so the matrix rotates under the rounds and every pair
+/// has its turn. All of them when unbounded.
+pub(crate) fn slice(
+    pairs: &[(usize, Contract)],
+    cursor: usize,
+    count: Option<usize>,
+) -> Vec<(usize, Contract)> {
+    let Some(count) = count.map(|count| count.min(pairs.len())) else {
+        return pairs.to_vec();
+    };
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+    (0..count)
+        .map(|step| pairs[(cursor + step) % pairs.len()])
+        .collect()
+}
+
+/// Judge `pairs` over `transports` from `workers` threads, in order.
+pub(crate) fn drive_selected<T, F>(
+    transports: &[Box<dyn RoundTrip>],
+    pairs: &[(usize, Contract)],
+    workers: usize,
+    judge: F,
+) -> Vec<T>
+where
+    T: Send,
+    F: Fn(&dyn RoundTrip, Contract) -> T + Sync,
+{
     let workers = workers.clamp(1, pairs.len().max(1));
     let next = AtomicUsize::new(0);
 
