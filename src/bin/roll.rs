@@ -41,7 +41,9 @@
 //! roll spawns a fleet of node processes beside the in-process scenarios and
 //! merges their snapshot each round (ADR-0028 clause 2). The board shows the
 //! fleet's rollup row, and a node's leaf only when it is not fine. Unset, no
-//! process is spawned and the roll is what it was.
+//! process is spawned and the roll is what it was. `XMIP_PLAYGROUND_ONLINE_NODES`
+//! says how many of the fleet's nodes, counting from the first, may assume the
+//! internet (ADR-0045); unset, every node reads `XMIP_ONLINE`.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};

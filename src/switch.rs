@@ -35,10 +35,38 @@ impl Switches {
     }
 }
 
+impl Switches {
+    /// The switches the fleet's node at 1-based `index` runs with: online for
+    /// the first `XMIP_PLAYGROUND_ONLINE_NODES` nodes when that is set, else
+    /// whatever `XMIP_ONLINE` says for every node.
+    #[must_use]
+    pub fn for_node(index: usize) -> Self {
+        Self {
+            online: node_online(index, online_nodes(), online()),
+        }
+    }
+}
+
 /// Whether this process may assume the internet: `XMIP_ONLINE=true`.
 #[must_use]
 pub fn online() -> bool {
     std::env::var("XMIP_ONLINE").is_ok_and(|raw| parse(&raw) == Some(true))
+}
+
+/// How many of a fleet's nodes, counting from the first, may assume the
+/// internet: `XMIP_PLAYGROUND_ONLINE_NODES` as a count, or none set.
+#[must_use]
+pub fn online_nodes() -> Option<usize> {
+    std::env::var("XMIP_PLAYGROUND_ONLINE_NODES")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+}
+
+/// The rule behind [`Switches::for_node`], with the environment already read:
+/// a count names the first that many nodes; no count leaves it to `all`.
+#[must_use]
+pub fn node_online(index: usize, count: Option<usize>, all: bool) -> bool {
+    count.map_or(all, |count| index <= count)
 }
 
 /// The switch a word means: `true`, `false`, `yes`, `no`, `on`, `off`.
@@ -75,6 +103,16 @@ mod tests {
         assert_eq!(Switches::default().word(), "offline");
         assert_eq!(Switches { online: true }.word(), "online");
         assert_eq!(Switches { online: true }.flags(), ["--online", "true"]);
+    }
+
+    #[test]
+    fn a_count_puts_the_first_nodes_online_and_no_count_defers_to_all() {
+        assert!(node_online(1, Some(2), false));
+        assert!(node_online(2, Some(2), false));
+        assert!(!node_online(3, Some(2), true));
+        assert!(!node_online(1, Some(0), true));
+        assert!(node_online(7, None, true));
+        assert!(!node_online(7, None, false));
     }
 
     #[test]

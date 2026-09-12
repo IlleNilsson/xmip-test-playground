@@ -37,36 +37,44 @@ suite joins as another value:
 
     Import-Module ./Xmip/Xmip.psd1
 
-    Start-XmipTest                                   # realistic, every scenario, until stopped
-    Start-XmipTest -Stress Harsh -Scenario pingpong, load -Rounds 20
-    Start-XmipTest -Stress Brutal -Nodes 20 -Online -PassThru | Start-XmipWeb
-    Start-XmipTest -Duration 00:15:00 -TimeFactor 9.5e-6   # three simulated years
+    Start-XmipTest                                        # Playground, realistic, every test, until stopped
+    Start-XmipTest -Suite Playground -Test HeavyLoad, LowLatency -Stress Harsh -Rounds 20
+    Start-XmipTest -Stress Brutal -Nodes 20 -OnlineNodes 5 -PassThru | Start-XmipWeb
+    Start-XmipTest -Duration 00:15:00 -TimeFactor 9.5e-6  # three simulated years
 
-    Get-XmipTestStatus                                     # what rolls, at what, how it stands
-    Get-XmipTestResult | Where-Object State -ne fine # every scope that is not green
-    Get-XmipTestResult -Scenario pingpong -Worst
+    Get-XmipTestStatus                                    # what runs, at what, how it stands
+    Get-XmipTestResult | Where-Object State -ne fine      # every scope that is not green
+    Get-XmipTestResult -Test RoundTrip -Worst
     Get-XmipHistory -Counted bytes
 
-    Start-XmipTestNode -Count 5 -Online              # five emulated nodes, no roll
+    Start-XmipTestNode -Count 5 -OnlineNodes 2            # five emulated nodes, two online, no roll
     Get-XmipTestNode
     Get-XmipTestNode | Where-Object Online | Stop-XmipTestNode
 
-    Get-XmipWeb                                            # the monitor's address and surface
-    Stop-XmipTest                                    # nodes first, then the roll
+    Get-XmipWeb                                           # the monitor's address and surface
+    Stop-XmipTest                                         # nodes first, then the roll
     Stop-XmipWeb
 
-    Start-XmipTest -Suite Estate                     # the estate's Pester suite, here and now
+    Start-XmipTest -Suite Estate                          # the estate's Pester suite, here and now
+    Start-XmipTest -Suite Estate -Test Rust.Style, XmipTest
+
+The Playground's tests, by the name a person asks for and the scenario the roll
+drives: RoundTrip is pingpong, LowLatency is furious, HeavyLoad is load,
+Retention is secretary, Filing is filing, ExclusiveClaim is claim, DailyBacklog
+is daily. `-Test` tab-completes them, and the estate's Pester files when the
+suite is Estate.
 
 Every Start and Stop takes `-WhatIf`. A roll's switches reach it through its
 own environment, never yours: `-Stress` is `XMIP_PLAYGROUND_STRESS`
-(`calm`, `realistic`, `harsh`, `brutal`), `-Scenario` is
-`XMIP_PLAYGROUND_SCENARIOS` (`pingpong`, `furious`, `load`, `secretary`,
-`filing`, `claim`, `daily`; unset means all), `-Nodes` is
-`XMIP_PLAYGROUND_NODES` (0 for no fleet), `-Online` is `XMIP_ONLINE`
-(ADR-0045), `-Duration` is `XMIP_PLAYGROUND_MAX_SECONDS`, `-TimeFactor` is
-`XMIP_PLAYGROUND_TIME_FACTOR` and `-LoadBytes` is `XMIP_PLAYGROUND_LOAD_BYTES`.
-A roll started by hand — `cargo run --bin roll [rounds]` with those variables
-set — is the same roll, and `Get-XmipTestStatus` lists it too.
+(`calm`, `realistic`, `harsh`, `brutal`), `-Test` is
+`XMIP_PLAYGROUND_SCENARIOS` (the scenario names above; unset means all),
+`-Nodes` is `XMIP_PLAYGROUND_NODES` (0 for no fleet), `-OnlineNodes` is
+`XMIP_PLAYGROUND_ONLINE_NODES` (the first that many nodes may assume the
+internet, ADR-0045; unset, every node reads `XMIP_ONLINE`), `-Duration` is
+`XMIP_PLAYGROUND_MAX_SECONDS`, `-TimeFactor` is `XMIP_PLAYGROUND_TIME_FACTOR`
+and `-LoadBytes` is `XMIP_PLAYGROUND_LOAD_BYTES`. A roll started by hand —
+`cargo run --bin roll [rounds]` with those variables set — is the same roll,
+and `Get-XmipTestStatus` lists it too.
 
 Everything a run writes on this machine goes under `.local-work/playground`
 at the repository root: `playground-snapshot.toml`, `playground-history.toml`

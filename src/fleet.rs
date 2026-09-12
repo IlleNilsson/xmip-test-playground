@@ -109,7 +109,7 @@ impl Fleet {
         for index in 1..=count {
             let name = format!("node-{index:02}");
             let path = snapshots.join(format!("{name}.toml"));
-            let child = fleet.start(&name, &path)?;
+            let child = fleet.start(index, &name, &path)?;
             fleet.nodes.push(Node {
                 name,
                 child: Some(child),
@@ -125,7 +125,9 @@ impl Fleet {
         Ok(fleet)
     }
 
-    fn start(&self, name: &str, path: &Path) -> io::Result<Child> {
+    /// Start the node at 1-based `index` — the ordinal decides whether it may
+    /// assume the internet, `XMIP_PLAYGROUND_ONLINE_NODES` counting from one.
+    fn start(&self, index: usize, name: &str, path: &Path) -> io::Result<Child> {
         /// How often a node ticks. A quarter second where a test wants
         /// contention now; two seconds in a brutal roll, where forty nodes
         /// ticking four times a second burned five cores between them
@@ -142,7 +144,7 @@ impl Fleet {
             .args(["--name", name, "--stress", self.stress.name()])
             .args(["--rounds", &self.rounds.to_string()])
             .args(["--interval-ms", &node_interval_ms(self.stress).to_string()])
-            .args(Switches::from_env().flags())
+            .args(Switches::for_node(index).flags())
             .arg("--shared")
             .arg(&self.shared)
             .arg("--snapshot")
@@ -219,7 +221,7 @@ impl Fleet {
             node.restarts += 1;
             node.silent = 0;
             let (name, path) = (node.name.clone(), node.path.clone());
-            match self.start(&name, &path) {
+            match self.start(index + 1, &name, &path) {
                 Ok(child) => {
                     let node = &mut self.nodes[index];
                     node.child = Some(child);
