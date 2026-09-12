@@ -6,7 +6,7 @@
 #
 # It would have bitten a generated repository the same way. A template that does
 # not obey the estate's rules produces repositories that start out breaking
-# them — docs/governance/rust-style.md section 4.
+# them — doc/governance/rust-style.md section 4.
 [workspace]
 
 [package]
@@ -187,7 +187,7 @@ toml = "0.8"
 unsafe_code = "forbid"
 
 [lints.clippy]
-# Warned, never denied. docs/governance/rust-style.md section 3: a function
+# Warned, never denied. doc/governance/rust-style.md section 3: a function
 # length gate was tried in this estate's PowerShell and produced a sixteen-entry
 # waiver list while catching nothing. The number worth reading is branches, and
 # clippy prints both.
