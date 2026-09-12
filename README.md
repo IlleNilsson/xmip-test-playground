@@ -39,7 +39,7 @@ suite joins as another value:
 
     Start-XmipTest                                        # Playground, realistic, every test, until stopped
     Start-XmipTest -Suite Playground -Test HeavyLoad, LowLatency -Stress Harsh -Rounds 20
-    Start-XmipTest -Stress Brutal -Nodes 20 -OnlineNodes 5 -PassThru | Start-XmipWeb
+    Start-XmipTest -Test HeavyLoad -Nodes alpha, beta, gamma -OnlineNodes alpha -PassThru | Start-XmipWeb
     Start-XmipTest -Duration 00:15:00 -TimeFactor 9.5e-6  # three simulated years
 
     Get-XmipTestStatus                                    # what runs, at what, how it stands
@@ -47,7 +47,7 @@ suite joins as another value:
     Get-XmipTestResult -Test RoundTrip -Worst
     Get-XmipHistory -Counted bytes
 
-    Start-XmipTestNode -Count 5 -OnlineNodes 2            # five emulated nodes, two online, no roll
+    Start-XmipTestNode -Nodes alpha, beta -OnlineNodes alpha  # two emulated nodes, one online, no roll
     Get-XmipTestNode
     Get-XmipTestNode | Where-Object Online | Stop-XmipTestNode
 
@@ -68,9 +68,11 @@ Every Start and Stop takes `-WhatIf`. A roll's switches reach it through its
 own environment, never yours: `-Stress` is `XMIP_PLAYGROUND_STRESS`
 (`calm`, `realistic`, `harsh`, `brutal`), `-Test` is
 `XMIP_PLAYGROUND_SCENARIOS` (the scenario names above; unset means all),
-`-Nodes` is `XMIP_PLAYGROUND_NODES` (0 for no fleet), `-OnlineNodes` is
-`XMIP_PLAYGROUND_ONLINE_NODES` (the first that many nodes may assume the
-internet, ADR-0045; unset, every node reads `XMIP_ONLINE`), `-Duration` is
+`-Nodes` is `XMIP_PLAYGROUND_NODE_NAMES` (the nodes to simulate, by name, one
+process each; an empty list is `XMIP_PLAYGROUND_NODES=0`, no fleet; omitted, the
+level's own numbered fleet), `-OnlineNodes` is `XMIP_PLAYGROUND_ONLINE_NODES`
+(which of them may assume the internet, by name, ADR-0045; unset, every node
+reads `XMIP_ONLINE`), `-Duration` is
 `XMIP_PLAYGROUND_MAX_SECONDS`, `-TimeFactor` is `XMIP_PLAYGROUND_TIME_FACTOR`
 and `-LoadBytes` is `XMIP_PLAYGROUND_LOAD_BYTES`. A roll started by hand —
 `cargo run --bin roll [rounds]` with those variables set — is the same roll,

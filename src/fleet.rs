@@ -95,6 +95,27 @@ impl Fleet {
         snapshots: &Path,
         rounds: u64,
     ) -> io::Result<Self> {
+        let names: Vec<String> = (1..=count)
+            .map(|index| format!("node-{index:02}"))
+            .collect();
+        Self::spawn_named(binary, stress, &names, shared, snapshots, rounds)
+    }
+
+    /// The same with every node named by the caller — the owner's shape,
+    /// 2026-09-12: a test starts processes simulating nodes, and the nodes are
+    /// named, not numbered. `XMIP_PLAYGROUND_NODE_NAMES` carries them to a roll.
+    ///
+    /// # Errors
+    ///
+    /// When a process cannot be started.
+    pub fn spawn_named(
+        binary: &Path,
+        stress: Stress,
+        names: &[String],
+        shared: &Path,
+        snapshots: &Path,
+        rounds: u64,
+    ) -> io::Result<Self> {
         std::fs::create_dir_all(shared)?;
         std::fs::create_dir_all(snapshots)?;
         std::fs::remove_file(shared.join("stop")).ok();
@@ -106,10 +127,10 @@ impl Fleet {
             rounds,
             nodes: Vec::new(),
         };
-        for index in 1..=count {
-            let name = format!("node-{index:02}");
+        for name in names {
+            let name = name.clone();
             let path = snapshots.join(format!("{name}.toml"));
-            let child = fleet.start(index, &name, &path)?;
+            let child = fleet.start(&name, &path)?;
             fleet.nodes.push(Node {
                 name,
                 child: Some(child),
@@ -125,9 +146,9 @@ impl Fleet {
         Ok(fleet)
     }
 
-    /// Start the node at 1-based `index` — the ordinal decides whether it may
-    /// assume the internet, `XMIP_PLAYGROUND_ONLINE_NODES` counting from one.
-    fn start(&self, index: usize, name: &str, path: &Path) -> io::Result<Child> {
+    /// Start the node called `name` — the name decides whether it may assume
+    /// the internet, `XMIP_PLAYGROUND_ONLINE_NODES` naming the ones that may.
+    fn start(&self, name: &str, path: &Path) -> io::Result<Child> {
         /// How often a node ticks. A quarter second where a test wants
         /// contention now; two seconds in a brutal roll, where forty nodes
         /// ticking four times a second burned five cores between them
@@ -144,7 +165,7 @@ impl Fleet {
             .args(["--name", name, "--stress", self.stress.name()])
             .args(["--rounds", &self.rounds.to_string()])
             .args(["--interval-ms", &node_interval_ms(self.stress).to_string()])
-            .args(Switches::for_node(index).flags())
+            .args(Switches::for_node(name).flags())
             .arg("--shared")
             .arg(&self.shared)
             .arg("--snapshot")
@@ -221,7 +242,7 @@ impl Fleet {
             node.restarts += 1;
             node.silent = 0;
             let (name, path) = (node.name.clone(), node.path.clone());
-            match self.start(index + 1, &name, &path) {
+            match self.start(&name, &path) {
                 Ok(child) => {
                     let node = &mut self.nodes[index];
                     node.child = Some(child);

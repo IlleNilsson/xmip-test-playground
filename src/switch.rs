@@ -36,13 +36,13 @@ impl Switches {
 }
 
 impl Switches {
-    /// The switches the fleet's node at 1-based `index` runs with: online for
-    /// the first `XMIP_PLAYGROUND_ONLINE_NODES` nodes when that is set, else
+    /// The switches the fleet's node called `name` runs with: online when
+    /// `XMIP_PLAYGROUND_ONLINE_NODES` names it, else — the variable unset —
     /// whatever `XMIP_ONLINE` says for every node.
     #[must_use]
-    pub fn for_node(index: usize) -> Self {
+    pub fn for_node(name: &str) -> Self {
         Self {
-            online: node_online(index, online_nodes(), online()),
+            online: node_online(name, online_nodes().as_deref(), online()),
         }
     }
 }
@@ -53,20 +53,33 @@ pub fn online() -> bool {
     std::env::var("XMIP_ONLINE").is_ok_and(|raw| parse(&raw) == Some(true))
 }
 
-/// How many of a fleet's nodes, counting from the first, may assume the
-/// internet: `XMIP_PLAYGROUND_ONLINE_NODES` as a count, or none set.
+/// The fleet's nodes that may assume the internet, by name:
+/// `XMIP_PLAYGROUND_ONLINE_NODES`, comma separated; `None` when unset. Set and
+/// empty means none of them.
 #[must_use]
-pub fn online_nodes() -> Option<usize> {
+pub fn online_nodes() -> Option<Vec<String>> {
     std::env::var("XMIP_PLAYGROUND_ONLINE_NODES")
         .ok()
-        .and_then(|raw| raw.trim().parse().ok())
+        .map(|raw| names(&raw))
+}
+
+/// A comma-separated list of node names, trimmed, empties dropped.
+#[must_use]
+pub fn names(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The rule behind [`Switches::for_node`], with the environment already read:
-/// a count names the first that many nodes; no count leaves it to `all`.
+/// a list names the online nodes, case-insensitively; no list leaves it to `all`.
 #[must_use]
-pub fn node_online(index: usize, count: Option<usize>, all: bool) -> bool {
-    count.map_or(all, |count| index <= count)
+pub fn node_online(name: &str, online: Option<&[String]>, all: bool) -> bool {
+    online.map_or(all, |online| {
+        online.iter().any(|one| one.eq_ignore_ascii_case(name))
+    })
 }
 
 /// The switch a word means: `true`, `false`, `yes`, `no`, `on`, `off`.
@@ -106,13 +119,15 @@ mod tests {
     }
 
     #[test]
-    fn a_count_puts_the_first_nodes_online_and_no_count_defers_to_all() {
-        assert!(node_online(1, Some(2), false));
-        assert!(node_online(2, Some(2), false));
-        assert!(!node_online(3, Some(2), true));
-        assert!(!node_online(1, Some(0), true));
-        assert!(node_online(7, None, true));
-        assert!(!node_online(7, None, false));
+    fn a_list_names_the_online_nodes_and_no_list_defers_to_all() {
+        let online = names(" alpha, Beta ,, ");
+        assert_eq!(online, ["alpha", "Beta"]);
+        assert!(node_online("alpha", Some(&online), false));
+        assert!(node_online("beta", Some(&online), false));
+        assert!(!node_online("gamma", Some(&online), true));
+        assert!(!node_online("alpha", Some(&[]), true));
+        assert!(node_online("gamma", None, true));
+        assert!(!node_online("gamma", None, false));
     }
 
     #[test]

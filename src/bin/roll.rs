@@ -41,8 +41,9 @@
 //! roll spawns a fleet of node processes beside the in-process scenarios and
 //! merges their snapshot each round (ADR-0028 clause 2). The board shows the
 //! fleet's rollup row, and a node's leaf only when it is not fine. Unset, no
-//! process is spawned and the roll is what it was. `XMIP_PLAYGROUND_ONLINE_NODES`
-//! says how many of the fleet's nodes, counting from the first, may assume the
+//! process is spawned and the roll is what it was. `XMIP_PLAYGROUND_NODE_NAMES`
+//! names the nodes instead, comma separated, one process each, at any level;
+//! `XMIP_PLAYGROUND_ONLINE_NODES` names the ones among them that may assume the
 //! internet (ADR-0045); unset, every node reads `XMIP_ONLINE`.
 
 use std::io::IsTerminal;
@@ -167,25 +168,33 @@ fn main() {
     std::fs::remove_dir_all(&base).ok();
 }
 
-/// The fleet a roll wants, if any: `XMIP_PLAYGROUND_NODES` names a count (or,
-/// empty, the level's own; `0` means no fleet at any level), and `harsh` or
-/// `brutal` spawn one unasked. A fleet that cannot start is said so and the
-/// roll goes on without it.
+/// The fleet a roll wants, if any: `XMIP_PLAYGROUND_NODE_NAMES` names its nodes
+/// outright; else `XMIP_PLAYGROUND_NODES` names a count (or, empty, the level's
+/// own; `0` means no fleet at any level), and `harsh` or `brutal` spawn one
+/// unasked. A fleet that cannot start is said so and the roll goes on without it.
 fn spawn_fleet(stress: Stress, base: &Path) -> Option<Fleet> {
-    let nodes = std::env::var("XMIP_PLAYGROUND_NODES").ok();
-    if nodes.is_none() && stress < Stress::Harsh {
+    let listed = std::env::var("XMIP_PLAYGROUND_NODE_NAMES")
+        .ok()
+        .map(|raw| xmip_test_playground::switch::names(&raw));
+    let count = std::env::var("XMIP_PLAYGROUND_NODES").ok();
+    if listed.is_none() && count.is_none() && stress < Stress::Harsh {
         return None;
     }
-    let count = nodes
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .unwrap_or_else(|| stress.nodes());
-    if count == 0 {
+    let names = listed.unwrap_or_else(|| {
+        let count = count
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .unwrap_or_else(|| stress.nodes());
+        (1..=count)
+            .map(|index| format!("node-{index:02}"))
+            .collect()
+    });
+    if names.is_empty() {
         return None;
     }
     let shared = base.join("fleet/shared");
     let snapshots = base.join("fleet/snapshots");
     let spawned = node_binary()
-        .and_then(|binary| Fleet::spawn_binary(&binary, stress, count, &shared, &snapshots, 0));
+        .and_then(|binary| Fleet::spawn_named(&binary, stress, &names, &shared, &snapshots, 0));
     match spawned {
         Ok(fleet) => Some(fleet),
         Err(error) => {
