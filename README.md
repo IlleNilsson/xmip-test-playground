@@ -39,17 +39,17 @@ suite joins as another value:
 
     Start-XmipTest                                        # Playground, realistic, every test, until stopped
     Start-XmipTest -Suite Playground -Test HeavyLoad, LowLatency -Stress Harsh -Rounds 20
-    Start-XmipTest -Test HeavyLoad -Nodes alpha, beta, gamma -OnlineNodes alpha -PassThru | Start-XmipWeb
-    Start-XmipTest -Duration 00:15:00 -TimeFactor 9.5e-6  # three simulated years
+    Start-XmipTest -Suite Playground -Test HeavyLoad -Nodes alpha, beta, gamma -OnlineNodes alpha -PassThru | Start-XmipWeb
+    Start-XmipTest -Suite Playground -Duration 00:15:00 -TimeFactor 9.5e-6  # three simulated years
 
     Get-XmipTestStatus                                    # what runs, at what, how it stands
-    Get-XmipTestResult | Where-Object State -ne fine      # every scope that is not green
+    Get-XmipTestResult | Where-Object -Property State -NE -Value fine   # every scope that is not green
     Get-XmipTestResult -Test RoundTrip -Worst
     Get-XmipHistory -Counted bytes
 
     Start-XmipTestNode -Nodes alpha, beta -OnlineNodes alpha  # two emulated nodes, one online, no roll
     Get-XmipTestNode
-    Get-XmipTestNode | Where-Object Online | Stop-XmipTestNode
+    Get-XmipTestNode | Where-Object -Property Online -EQ -Value $true | Stop-XmipTestNode
 
     Get-XmipWeb                                           # the monitor's address and surface
     Stop-XmipTest                                         # nodes first, then the roll
