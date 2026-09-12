@@ -55,6 +55,8 @@ suite joins as another value:
     Stop-XmipTest                                    # nodes first, then the roll
     Stop-XmipWeb
 
+    Start-XmipTest -Suite Estate                     # the estate's Pester suite, here and now
+
 Every Start and Stop takes `-WhatIf`. A roll's switches reach it through its
 own environment, never yours: `-Stress` is `XMIP_PLAYGROUND_STRESS`
 (`calm`, `realistic`, `harsh`, `brutal`), `-Scenario` is
