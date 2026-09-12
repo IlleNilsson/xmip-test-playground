@@ -21,7 +21,9 @@
 //! detail → the failing leaf.
 //!
 //! Pass a number to run that many rounds and stop; omit it to roll until
-//! interrupted. Two time limits bound any roll (ADR-0028): a maximum wall-clock
+//! interrupted. `XMIP_PLAYGROUND_SCENARIOS` names the scenarios to drive, comma
+//! separated (`pingpong,load`); unset, every one rolls, so nothing changed
+//! quietly. Two time limits bound any roll (ADR-0028): a maximum wall-clock
 //! time, `XMIP_PLAYGROUND_MAX_SECONDS`, and a factor on time,
 //! `XMIP_PLAYGROUND_TIME_FACTOR`, which stretches a **simulated clock** — `1.0`
 //! mimics real time, retracted below one runs simulated time faster, so a long
@@ -58,6 +60,7 @@ fn main() {
     let base = std::env::temp_dir().join("playground");
     std::fs::remove_dir_all(&base).ok();
     let stress = Stress::from_env();
+    let chosen = chosen(std::env::var("XMIP_PLAYGROUND_SCENARIOS").ok().as_deref());
     let mut fleet = spawn_fleet(stress, &base);
 
     // Each scenario under its own subtree, each with faults or pressure on, so
@@ -107,13 +110,27 @@ fn main() {
         let headroom = Headroom::refresh();
 
         let mut snapshot = Snapshot::new();
-        merge(&mut snapshot, &pingpong.tick());
-        merge(&mut snapshot, &furious.tick());
-        merge(&mut snapshot, &load.tick());
-        merge(&mut snapshot, &secretary.tick(budget.simulated_elapsed()));
-        merge(&mut snapshot, &filing.tick());
-        merge(&mut snapshot, &claim.tick());
-        merge(&mut snapshot, &daily.tick());
+        if drives(&chosen, "pingpong") {
+            merge(&mut snapshot, &pingpong.tick());
+        }
+        if drives(&chosen, "furious") {
+            merge(&mut snapshot, &furious.tick());
+        }
+        if drives(&chosen, "load") {
+            merge(&mut snapshot, &load.tick());
+        }
+        if drives(&chosen, "secretary") {
+            merge(&mut snapshot, &secretary.tick(budget.simulated_elapsed()));
+        }
+        if drives(&chosen, "filing") {
+            merge(&mut snapshot, &filing.tick());
+        }
+        if drives(&chosen, "claim") {
+            merge(&mut snapshot, &claim.tick());
+        }
+        if drives(&chosen, "daily") {
+            merge(&mut snapshot, &daily.tick());
+        }
         if let Some(fleet) = fleet.as_mut() {
             merge(&mut snapshot, &fleet.tick());
         }
@@ -149,8 +166,9 @@ fn main() {
 }
 
 /// The fleet a roll wants, if any: `XMIP_PLAYGROUND_NODES` names a count (or,
-/// empty, the level's own), and `harsh` or `brutal` spawn one unasked. A fleet
-/// that cannot start is said so and the roll goes on without it.
+/// empty, the level's own; `0` means no fleet at any level), and `harsh` or
+/// `brutal` spawn one unasked. A fleet that cannot start is said so and the
+/// roll goes on without it.
 fn spawn_fleet(stress: Stress, base: &Path) -> Option<Fleet> {
     let nodes = std::env::var("XMIP_PLAYGROUND_NODES").ok();
     if nodes.is_none() && stress < Stress::Harsh {
@@ -159,6 +177,9 @@ fn spawn_fleet(stress: Stress, base: &Path) -> Option<Fleet> {
     let count = nodes
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .unwrap_or_else(|| stress.nodes());
+    if count == 0 {
+        return None;
+    }
     let shared = base.join("fleet/shared");
     let snapshots = base.join("fleet/snapshots");
     let spawned = node_binary()
@@ -170,6 +191,42 @@ fn spawn_fleet(stress: Stress, base: &Path) -> Option<Fleet> {
             None
         }
     }
+}
+
+/// The scenarios named in `XMIP_PLAYGROUND_SCENARIOS`: empty when the variable is
+/// unset or names nothing, meaning every scenario. Names are trimmed and lowered;
+/// one the roll does not know is said on stderr and dropped, so a typo loses one
+/// scenario visibly rather than the whole roll silently.
+fn chosen(raw: Option<&str>) -> Vec<String> {
+    let (known, unknown): (Vec<String>, Vec<String>) = raw
+        .unwrap_or_default()
+        .split(',')
+        .map(|name| name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .partition(|name| SCENARIOS.contains(&name.as_str()));
+    for name in unknown {
+        eprintln!(
+            "no scenario named {name}; the scenarios are {}",
+            SCENARIOS.join(", ")
+        );
+    }
+    known
+}
+
+/// Every scenario a roll can drive, by the name `XMIP_PLAYGROUND_SCENARIOS` uses.
+const SCENARIOS: [&str; 7] = [
+    "pingpong",
+    "furious",
+    "load",
+    "secretary",
+    "filing",
+    "claim",
+    "daily",
+];
+
+/// Whether this roll drives the named scenario: every one when nothing was chosen.
+fn drives(chosen: &[String], scenario: &str) -> bool {
+    chosen.is_empty() || chosen.iter().any(|name| name == scenario)
 }
 
 /// A publish path: the environment override, or the well-known temp file the GUI
@@ -292,5 +349,37 @@ fn word(health: Health) -> &'static str {
         Health::Exhausted => "EXHAUSTED",
         Health::Holding => "HOLDING",
         Health::Done => "DONE",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_chosen_drives_every_scenario() {
+        assert!(chosen(None).is_empty());
+        assert!(chosen(Some("")).is_empty());
+        assert!(chosen(Some(" , ")).is_empty());
+        for scenario in SCENARIOS {
+            assert!(drives(&[], scenario));
+        }
+    }
+
+    #[test]
+    fn a_list_drives_only_what_it_names() {
+        let picked = chosen(Some(" PingPong, load "));
+        assert_eq!(picked, ["pingpong", "load"]);
+        assert!(drives(&picked, "pingpong"));
+        assert!(drives(&picked, "load"));
+        assert!(!drives(&picked, "furious"));
+    }
+
+    #[test]
+    fn an_unknown_name_is_dropped_and_the_rest_kept() {
+        let picked = chosen(Some("pingpong,typo"));
+        assert_eq!(picked, ["pingpong"]);
+        assert!(!drives(&picked, "typo"));
+        assert!(!drives(&picked, "daily"));
     }
 }
