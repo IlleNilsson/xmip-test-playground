@@ -28,28 +28,31 @@ running thread belongs to whatever hosts it.
 
 ## Running it
 
-Nothing here starts on its own. A person starts a roll, a set of emulated
-nodes or the web monitor, sees what is running, and stops it — Start, Get and
-Stop for each, from the estate's PowerShell module:
+Nothing here starts on its own. Xmip provides its tests as suites, and the
+Playground is the first: a person starts a run of it (a roll), a set of
+emulated nodes or the web monitor, sees what is running, and stops it — Start,
+Get and Stop for each, from the estate's PowerShell module. `-Suite Playground`
+is the default while it is the only suite; a transport's or a contract's own
+suite joins as another value:
 
     Import-Module ./Xmip/Xmip.psd1
 
-    Start-XmipPlayground                                   # realistic, every scenario, until stopped
-    Start-XmipPlayground -Stress Harsh -Scenario pingpong, load -Rounds 20
-    Start-XmipPlayground -Stress Brutal -Nodes 20 -Online -PassThru | Start-XmipWeb
-    Start-XmipPlayground -Duration 00:15:00 -TimeFactor 9.5e-6   # three simulated years
+    Start-XmipTest                                   # realistic, every scenario, until stopped
+    Start-XmipTest -Stress Harsh -Scenario pingpong, load -Rounds 20
+    Start-XmipTest -Stress Brutal -Nodes 20 -Online -PassThru | Start-XmipWeb
+    Start-XmipTest -Duration 00:15:00 -TimeFactor 9.5e-6   # three simulated years
 
-    Get-XmipPlayground                                     # what rolls, at what, how it stands
-    Get-XmipPlaygroundResult | Where-Object State -ne fine # every scope that is not green
-    Get-XmipPlaygroundResult -Scenario pingpong -Worst
+    Get-XmipTestStatus                                     # what rolls, at what, how it stands
+    Get-XmipTestResult | Where-Object State -ne fine # every scope that is not green
+    Get-XmipTestResult -Scenario pingpong -Worst
     Get-XmipHistory -Counted bytes
 
-    Start-XmipPlaygroundNode -Count 5 -Online              # five emulated nodes, no roll
-    Get-XmipPlaygroundNode
-    Get-XmipPlaygroundNode | Where-Object Online | Stop-XmipPlaygroundNode
+    Start-XmipTestNode -Count 5 -Online              # five emulated nodes, no roll
+    Get-XmipTestNode
+    Get-XmipTestNode | Where-Object Online | Stop-XmipTestNode
 
     Get-XmipWeb                                            # the monitor's address and surface
-    Stop-XmipPlayground                                    # nodes first, then the roll
+    Stop-XmipTest                                    # nodes first, then the roll
     Stop-XmipWeb
 
 Every Start and Stop takes `-WhatIf`. A roll's switches reach it through its
@@ -61,7 +64,7 @@ own environment, never yours: `-Stress` is `XMIP_PLAYGROUND_STRESS`
 (ADR-0045), `-Duration` is `XMIP_PLAYGROUND_MAX_SECONDS`, `-TimeFactor` is
 `XMIP_PLAYGROUND_TIME_FACTOR` and `-LoadBytes` is `XMIP_PLAYGROUND_LOAD_BYTES`.
 A roll started by hand — `cargo run --bin roll [rounds]` with those variables
-set — is the same roll, and `Get-XmipPlayground` lists it too.
+set — is the same roll, and `Get-XmipTestStatus` lists it too.
 
 Everything a run writes on this machine goes under `.local-work/playground`
 at the repository root: `playground-snapshot.toml`, `playground-history.toml`
