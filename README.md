@@ -79,7 +79,7 @@ sweeps, dropped claims) so the board is realistic rather than uniformly green;
 
 ## Two time limits bound any roll
 
-Every roll honours two limits, one `Budget` shared by all scenarios rather than
+Every roll honors two limits, one `Budget` shared by all scenarios rather than
 per-scenario knobs. A **maximum time** is a wall-clock ceiling: when it is
 reached the roll stops, whatever the round count — `XMIP_PLAYGROUND_MAX_SECONDS`.
 The ceiling is checked between rounds, so a long tick runs to completion rather
